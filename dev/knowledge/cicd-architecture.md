@@ -657,10 +657,14 @@ This ensures the pr-summary job runs even when upstream jobs are skipped (path f
 Same jobs as PR validation plus:
 - **integration-tests** -- `pytest tests/integration/ --timeout=300` (depends on unit-tests, `continue-on-error: true`)
 
-### 9.5 Deploy (Manual Dispatch)
+### 9.5 Deploy (Auto + Manual)
+
+Triggered automatically on push to `develop` (→ staging) or `main` (→ prod), and manually via `workflow_dispatch`. See [ADR-0004](../adr/0004-branch-per-environment-deployment.md).
 
 ```yaml
 on:
+  push:
+    branches: [develop, main]
   workflow_dispatch:
     inputs:
       environment:
@@ -668,7 +672,20 @@ on:
         options: [dev, staging, prod]
 ```
 
-Uses GitHub Environments (`environment: ${{ github.event.inputs.environment }}`) for environment-specific secrets and protection rules.
+| Branch    | Environment | Deploy branch   | Approval |
+|-----------|-------------|-----------------|----------|
+| `develop` | staging     | `origin/develop`| auto     |
+| `main`    | prod        | `origin/main`   | required |
+
+Uses GitHub Environments for environment-specific secrets and protection rules. The `prod` environment has required reviewers configured as a deployment gate.
+
+**Jobs:** validate → deploy → health-check → live-tests (staging only)
+
+The **live-tests** job runs `pytest -m live` on the staging VM after health checks pass, executing tests that require Infrahub, Containerlab, and gNMI connectivity. JUnit XML results are uploaded as workflow artifacts.
+
+### 9.5a Release Confidence Gate (PR Validation)
+
+PRs targeting `main` include a **staging-confidence** job in `pr-validation.yml` that verifies the most recent Deploy workflow run on `develop` succeeded. This prevents merging to production when the staging deployment is broken.
 
 ### 9.6 Build Artifacts (Version Tags)
 

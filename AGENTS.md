@@ -139,7 +139,7 @@ See `dev/guidelines/git-workflow.md` for full details.
 1. **NEVER SSH or SCP directly to the GCP VM.** All changes must flow through Git.
 2. **ALWAYS create a feature branch** from `develop` (never commit directly to `main` or `develop`).
 3. **ALWAYS open a Pull Request** targeting `develop`. CI must pass before merge.
-4. **Deployment is automated.** Merging to `main` triggers the CD pipeline (`deploy.yml`) which SSHs to the VM, pulls code, and restarts the worker via systemd.
+4. **Deployment is automated.** Pushes to `develop` auto-deploy to **staging**; pushes to `main` deploy to **production** (requires reviewer approval). The staging pipeline also runs live integration tests (`pytest -m live`). See [ADR-0004](dev/adr/0004-branch-per-environment-deployment.md).
 5. **Infrastructure changes** (firewall rules, VM provisioning) must be documented in `docs/install.md` or an ADR, even if applied manually via `gcloud`.
 
 ### Workflow for Code Changes

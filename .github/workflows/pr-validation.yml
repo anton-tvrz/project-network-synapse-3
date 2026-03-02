@@ -344,6 +344,55 @@ jobs:
             Please update documentation if these changes affect development workflows.
 
   # ---------------------------------------------------------------------------
+  # Staging confidence — verify last staging deploy succeeded (main PRs only)
+  # ---------------------------------------------------------------------------
+  staging-confidence:
+    name: Staging Confidence
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.base.ref == 'main'
+    permissions:
+      actions: read
+    steps:
+      - name: Check last staging deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Checking most recent Deploy workflow run on develop branch..."
+
+          RESULT=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow=deploy.yml \
+            --branch=develop \
+            --limit=1 \
+            --json conclusion,status,createdAt \
+            --jq '.[0]')
+
+          if [ -z "$RESULT" ] || [ "$RESULT" = "null" ]; then
+            echo "No staging deployment found on develop branch."
+            echo "A successful staging deployment is required before merging to main."
+            exit 1
+          fi
+
+          STATUS=$(echo "$RESULT" | jq -r '.status')
+          CONCLUSION=$(echo "$RESULT" | jq -r '.conclusion')
+          CREATED=$(echo "$RESULT" | jq -r '.createdAt')
+
+          echo "Last staging deploy: status=$STATUS conclusion=$CONCLUSION created=$CREATED"
+
+          if [ "$STATUS" != "completed" ]; then
+            echo "Staging deployment is still in progress ($STATUS). Wait for it to finish."
+            exit 1
+          fi
+
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "Last staging deployment failed ($CONCLUSION)."
+            echo "Fix the staging deployment before merging to main."
+            exit 1
+          fi
+
+          echo "Staging deployment passed."
+
+  # ---------------------------------------------------------------------------
   # PR Summary — aggregate results
   # ---------------------------------------------------------------------------
   pr-summary:
@@ -357,6 +406,7 @@ jobs:
       - secrets-detection
       - unit-tests
       - uv-lock-check
+      - staging-confidence
     if: always()
     steps:
       - name: Check job results
@@ -372,6 +422,7 @@ jobs:
           echo "| Secrets Detection | ${{ needs.secrets-detection.result }} |"
           echo "| Unit Tests | ${{ needs.unit-tests.result }} |"
           echo "| uv Lock Check | ${{ needs.uv-lock-check.result }} |"
+          echo "| Staging Confidence | ${{ needs.staging-confidence.result }} |"
           echo ""
 
           if [[ "${{ needs.issue-link-check.result }}" == "failure" ]] || \
@@ -379,7 +430,8 @@ jobs:
              [[ "${{ needs.code-quality.result }}" == "failure" ]] || \
              [[ "${{ needs.secrets-detection.result }}" == "failure" ]] || \
              [[ "${{ needs.unit-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.uv-lock-check.result }}" == "failure" ]]; then
+             [[ "${{ needs.uv-lock-check.result }}" == "failure" ]] || \
+             [[ "${{ needs.staging-confidence.result }}" == "failure" ]]; then
             echo "Required jobs failed — blocking merge."
             exit 1
           fi

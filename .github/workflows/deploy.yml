@@ -144,6 +144,7 @@ jobs:
     name: Health Check
     runs-on: ubuntu-latest
     needs: [validate, deploy]
+    environment: ${{ needs.validate.outputs.deploy_env }}
     steps:
       - name: Set up SSH key
         run: |
@@ -171,3 +172,50 @@ jobs:
             # Infrahub responds
             curl -s -o /dev/null -w 'Infrahub:    HTTP %{http_code}\n' http://localhost:8000
           "
+
+  # ─────────────────────────────────────────────
+  # Live integration tests (staging only)
+  # ─────────────────────────────────────────────
+  live-tests:
+    name: Live Tests
+    runs-on: ubuntu-latest
+    needs: [validate, health-check]
+    if: needs.validate.outputs.deploy_env == 'staging'
+    environment: staging
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Run live tests on staging VM
+        env:
+          REMOTE_HOST: ${{ secrets.VM_HOST }}
+          REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
+        run: |
+          SSH_KEY="$HOME/.ssh/deploy_key"
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
+
+          echo "Running live integration tests on staging VM..."
+
+          ssh "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "
+            export PATH=\"\$HOME/.local/bin:\$PATH\"
+            cd ~/project-network-synapse-3
+            uv run pytest tests/integration/ -v -m live \
+              --timeout=120 \
+              --junitxml=live-test-results.xml
+          "
+
+          # Copy test results back
+          scp -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+            "${REMOTE_USER}@${REMOTE_HOST}:~/project-network-synapse-3/live-test-results.xml" \
+            ./live-test-results.xml || true
+
+      - name: Upload live test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-test-results
+          path: live-test-results.xml

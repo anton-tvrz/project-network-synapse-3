@@ -125,25 +125,32 @@ The workflow commits directly to `main`. Two things are needed:
 
 ## Deployment (GitOps)
 
-Deployment is **fully automated** via GitHub Actions.
+Deployment is **fully automated** via GitHub Actions (see [ADR-0004](../dev/adr/0004-branch-per-environment-deployment.md)).
 
-| Trigger                    | Target               | Workflow                       |
-| -------------------------- | -------------------- | ------------------------------ |
-| PR merge to `main`         | GCP VM (staging)     | `.github/workflows/deploy.yml` |
-| Manual `workflow_dispatch` | dev / staging / prod | `.github/workflows/deploy.yml` |
+| Trigger                    | Target                      | Workflow                       |
+| -------------------------- | --------------------------- | ------------------------------ |
+| Push to `develop`          | Staging VM (auto-deploy)    | `.github/workflows/deploy.yml` |
+| Push to `main`             | Production VM (approval required) | `.github/workflows/deploy.yml` |
+| Manual `workflow_dispatch` | dev / staging / prod        | `.github/workflows/deploy.yml` |
 
 ### Pipeline stages
 
 1. **Validate** — `uv run invoke check-all` + unit tests
 2. **Deploy** — SSH to VM → `git pull` → `uv sync` → `systemctl restart synapse-worker`
 3. **Health check** — verify worker process, Temporal, Infrahub
+4. **Live tests** (staging only) — `pytest -m live` on the staging VM
 
-### Required GitHub Secrets
+### Production approval gate
+
+The `prod` GitHub Actions environment has **required reviewers** configured. Pushes to `main` pause at the environment protection rule until a reviewer approves. PRs targeting `main` also include a **staging-confidence** gate that verifies the last staging deployment succeeded.
+
+### Required GitHub Secrets (per environment)
 
 | Secret       | Purpose                               |
 | ------------ | ------------------------------------- |
 | `VM_SSH_KEY` | SSH private key for the deployment VM |
 | `VM_HOST`    | IP address of the GCP VM              |
+| `VM_USER`    | SSH username on the VM                |
 
 ## Issue Lifecycle
 
