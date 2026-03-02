@@ -1,8 +1,14 @@
 """Integration tests — verify Infrahub connectivity and Containerlab device state.
 
-These tests require live infrastructure (Infrahub + Containerlab) to be running.
-They are gated by the ``@pytest.mark.integration`` marker and are skipped during
-normal ``pytest`` runs.  Use ``pytest -m integration`` to execute them.
+Tests are split into two marker categories:
+
+- ``@pytest.mark.integration`` — offline tests (config hygiene checks) that run
+  in CI without live infrastructure.
+- ``@pytest.mark.live`` — tests requiring running Infrahub, Containerlab, or gNMI.
+  These run only on the staging VM after deployment via ``deploy.yml``.
+
+Use ``pytest -m integration`` for offline tests, ``pytest -m live`` for
+live-infra tests.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
+@pytest.mark.live
 def test_infrahub_connection():
     """Verify that we can reach the Infrahub API and authenticate."""
     from network_synapse.infrahub.client import InfrahubConfigClient
@@ -34,7 +40,7 @@ def test_infrahub_connection():
         client.close()
 
 
-@pytest.mark.integration
+@pytest.mark.live
 def test_infrahub_device_config_retrieval():
     """Verify that we can retrieve a full device config from Infrahub."""
     from network_synapse.infrahub.client import InfrahubConfigClient
@@ -62,7 +68,7 @@ def test_infrahub_device_config_retrieval():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
+@pytest.mark.live
 def test_containerlab_gnmi_connectivity():
     """Verify gNMI connectivity to a Containerlab SR Linux node."""
     from network_synapse.scripts.deploy_configs import validate_gnmi_connection
@@ -71,7 +77,7 @@ def test_containerlab_gnmi_connectivity():
     assert validate_gnmi_connection(device_ip)
 
 
-@pytest.mark.integration
+@pytest.mark.live
 def test_containerlab_bgp_state():
     """Verify BGP sessions are established on a Containerlab device."""
     from network_synapse.scripts.validate_state import check_bgp_summary

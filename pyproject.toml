@@ -174,6 +174,8 @@ testpaths = ["tests"]
 markers = [
     "unit: Unit tests (no external dependencies)",
     "integration: Integration tests (requires Infrahub/Temporal/Containerlab)",
+    "live: Live infrastructure tests (requires running Infrahub/Containerlab/gNMI)",
+    "e2e: End-to-end pipeline tests",
     "slow: Slow tests (>30 seconds)",
     "pre_deployment: Pre-deployment validation",
     "post_deployment: Post-deployment validation",
