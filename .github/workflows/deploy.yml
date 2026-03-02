@@ -196,10 +196,11 @@ jobs:
           REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
         run: |
           SSH_KEY="$HOME/.ssh/deploy_key"
-          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=yes -o ConnectTimeout=15)
 
           echo "Running live integration tests on staging VM..."
 
+          set +e
           ssh "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "
             export PATH=\"\$HOME/.local/bin:\$PATH\"
             cd ~/project-network-synapse-3
@@ -207,11 +208,15 @@ jobs:
               --timeout=120 \
               --junitxml=live-test-results.xml
           "
+          TEST_EXIT=$?
+          set -e
 
-          # Copy test results back
-          scp -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+          # Always copy test results back, even on failure
+          scp -i "$SSH_KEY" -o StrictHostKeyChecking=yes \
             "${REMOTE_USER}@${REMOTE_HOST}:~/project-network-synapse-3/live-test-results.xml" \
             ./live-test-results.xml || true
+
+          exit "$TEST_EXIT"
 
       - name: Upload live test results
         uses: actions/upload-artifact@v4

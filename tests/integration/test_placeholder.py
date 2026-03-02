@@ -23,7 +23,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 @pytest.mark.live
 def test_infrahub_connection():
     """Verify that we can reach the Infrahub API and authenticate."""
@@ -41,7 +40,6 @@ def test_infrahub_connection():
         client.close()
 
 
-@pytest.mark.integration
 @pytest.mark.live
 def test_infrahub_device_config_retrieval():
     """Verify that we can retrieve a full device config from Infrahub."""
@@ -70,7 +68,6 @@ def test_infrahub_device_config_retrieval():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 @pytest.mark.live
 def test_containerlab_gnmi_connectivity():
     """Verify gNMI connectivity to a Containerlab SR Linux node."""
@@ -80,7 +77,6 @@ def test_containerlab_gnmi_connectivity():
     assert validate_gnmi_connection(device_ip)
 
 
-@pytest.mark.integration
 @pytest.mark.live
 def test_containerlab_bgp_state():
     """Verify BGP sessions are established on a Containerlab device."""

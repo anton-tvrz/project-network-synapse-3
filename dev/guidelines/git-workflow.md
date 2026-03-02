@@ -125,7 +125,7 @@ The workflow commits directly to `main`. Two things are needed:
 
 ## Deployment (GitOps)
 
-Deployment is **fully automated** via GitHub Actions (see [ADR-0004](../dev/adr/0004-branch-per-environment-deployment.md)).
+Deployment is **fully automated** via GitHub Actions (see [ADR-0004](../adr/0004-branch-per-environment-deployment.md)).
 
 | Trigger                    | Target                      | Workflow                       |
 | -------------------------- | --------------------------- | ------------------------------ |

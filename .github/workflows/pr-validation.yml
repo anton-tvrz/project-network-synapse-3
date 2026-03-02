@@ -363,6 +363,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --workflow=deploy.yml \
             --branch=develop \
+            --event=push \
             --limit=1 \
             --json conclusion,status,createdAt \
             --jq '.[0]')
