@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone the repository
-git clone https://github.com/chinga-chinga/project-network-synapse-3.git
+git clone https://github.com/anton-tvrz/project-network-synapse-3.git
 cd project-network-synapse-3
 
 # Initialize submodules

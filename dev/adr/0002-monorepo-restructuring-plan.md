@@ -224,10 +224,10 @@ Infrahub-style sections: Why, What changed, How to review, How to test, Impact &
 ### 6.3 `CODEOWNERS`
 
 ```
-/backend/    @chinga-chinga
-/workers/    @chinga-chinga
-/docs/       @chinga-chinga
-/development/ @chinga-chinga
+/backend/    @anton-tvrz
+/workers/    @anton-tvrz
+/docs/       @anton-tvrz
+/development/ @anton-tvrz
 ```
 
 ### 6.4 `dependabot.yml`

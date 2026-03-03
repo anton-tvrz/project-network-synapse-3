@@ -2,7 +2,7 @@ name: Feature Request
 description: Suggest a new feature or enhancement
 title: "[Feature]: "
 labels: ["enhancement"]
-assignees: ["chinga-chinga"]
+assignees: ["anton-tvrz"]
 body:
   - type: input
     id: branch_name

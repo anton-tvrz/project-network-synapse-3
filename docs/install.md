@@ -286,7 +286,7 @@ uv python list | grep 3.11  # Expect: Python 3.11 listed
 ```bash
 # Clone (adjust URL if using SSH)
 cd ~
-git clone https://github.com/chinga-chinga/project-network-synapse-3.git
+git clone https://github.com/anton-tvrz/project-network-synapse-3.git
 cd project-network-synapse-3
 ```
 

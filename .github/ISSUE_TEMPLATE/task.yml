@@ -2,7 +2,7 @@ name: Task
 description: A development task or chore
 title: "[Task]: "
 labels: ["task"]
-assignees: ["chinga-chinga"]
+assignees: ["anton-tvrz"]
 body:
   - type: input
     id: branch_name

@@ -218,7 +218,7 @@ package = "network_synapse"
 directory = "changelog"
 filename = "CHANGELOG.md"
 title_format = "## [{version}] - {project_date}"
-issue_format = "[#{issue}](https://github.com/chinga-chinga/project-network-synapse-3/issues/{issue})"
+issue_format = "[#{issue}](https://github.com/anton-tvrz/project-network-synapse-3/issues/{issue})"
 
 [[tool.towncrier.type]]
 directory = "added"
