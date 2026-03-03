@@ -26,7 +26,7 @@ export PATH=$HOME/.local/bin:$PATH
 
 # Clone the repo (skip if already cloned)
 cd ~
-git clone https://github.com/chinga-chinga/project-network-synapse-3.git
+git clone https://github.com/anton-tvrz/project-network-synapse-3.git
 cd project-network-synapse-3
 git submodule update --init --recursive
 

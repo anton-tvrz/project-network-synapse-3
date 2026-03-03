@@ -34,7 +34,7 @@ Add to GitHub:
 Clone using SSH:
 
 ```bash
-git clone git@github.com:chinga-chinga/project-network-synapse-3.git
+git clone git@github.com:anton-tvrz/project-network-synapse-3.git
 ```
 
 ## UV

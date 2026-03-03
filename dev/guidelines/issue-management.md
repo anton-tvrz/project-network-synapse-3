@@ -103,7 +103,7 @@ This prevents accidental or premature manual closures.
 
 > **AI agents MUST follow these rules when working on issues.**
 
-1. **Never start work without an assignee** — add yourself or `chinga-chinga` if no human is assigned.
+1. **Never start work without an assignee** — add yourself or `anton-tvrz` if no human is assigned.
 2. **Always create a branch** matching the `## Branch` field in the issue body.
 3. **Check off sub-tasks** in the issue body as each one is completed.
 4. **Always open a PR with `Closes #N`** to link work back to the issue.

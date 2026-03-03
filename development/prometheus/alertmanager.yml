@@ -47,7 +47,7 @@ receivers:
           - {{ .Annotations.summary }}
             {{ .Annotations.description }}
           {{ end }}
-          *Runbook:* https://github.com/chinga-chinga/project-network-synapse-3/blob/main/docs/runbooks/
+          *Runbook:* https://github.com/anton-tvrz/project-network-synapse-3/blob/main/docs/runbooks/
         send_resolved: true
 
   - name: "slack-warning"
