@@ -1,4 +1,9 @@
 # Deploy to dev/staging/prod
+#
+# Auto-deploy: staging on develop push, prod on main push.
+# Manual: workflow_dispatch to any environment.
+#
+# Pipeline: quality checks → deploy → health check → live tests (staging only)
 name: Deploy
 
 on:
@@ -30,10 +35,23 @@ permissions:
 
 jobs:
   # ─────────────────────────────────────────────
-  # Pre-deployment validation
+  # Pre-deployment quality gate (reusable workflow)
   # ─────────────────────────────────────────────
-  validate:
-    name: Pre-deployment Checks
+  quality:
+    name: Quality Checks
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+      security-events: write
+    secrets: inherit
+    with:
+      run-integration-hygiene: true
+
+  # ─────────────────────────────────────────────
+  # Prepare deployment (runs in parallel with quality)
+  # ─────────────────────────────────────────────
+  prepare:
+    name: Prepare Deployment
     runs-on: ubuntu-latest
     outputs:
       deploy_env: ${{ steps.env.outputs.environment }}
@@ -53,39 +71,16 @@ jobs:
             echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.env.outputs.ref }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: uv sync --all-groups
-
-      - name: Run quality checks
-        run: uv run invoke check-all
-
-      - name: Run unit tests
-        run: uv run invoke backend.test-unit
-
   # ─────────────────────────────────────────────
   # Deploy to GCP VM via SSH
   # ─────────────────────────────────────────────
   deploy:
-    name: Deploy to ${{ needs.validate.outputs.deploy_env }}
+    name: Deploy to ${{ needs.prepare.outputs.deploy_env }}
     runs-on: ubuntu-latest
-    needs: validate
-    environment: ${{ needs.validate.outputs.deploy_env }}
+    needs: [quality, prepare]
+    environment: ${{ needs.prepare.outputs.deploy_env }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up SSH key
         run: |
@@ -97,9 +92,9 @@ jobs:
       - name: Resolve deploy branch
         id: branch
         run: |
-          ENV="${{ needs.validate.outputs.deploy_env }}"
+          ENV="${{ needs.prepare.outputs.deploy_env }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "name=${{ needs.validate.outputs.deploy_ref }}" >> "$GITHUB_OUTPUT"
+            echo "name=${{ needs.prepare.outputs.deploy_ref }}" >> "$GITHUB_OUTPUT"
           elif [ "$ENV" = "prod" ]; then
             echo "name=origin/main" >> "$GITHUB_OUTPUT"
           else
@@ -117,7 +112,7 @@ jobs:
 
           echo "══════════════════════════════════════"
           echo "  Deploying to: $REMOTE_HOST"
-          echo "  Environment:  ${{ needs.validate.outputs.deploy_env }}"
+          echo "  Environment:  ${{ needs.prepare.outputs.deploy_env }}"
           echo "  Branch:       $DEPLOY_BRANCH"
           echo "══════════════════════════════════════"
 
@@ -143,14 +138,15 @@ jobs:
   health-check:
     name: Health Check
     runs-on: ubuntu-latest
-    needs: [validate, deploy]
-    environment: ${{ needs.validate.outputs.deploy_env }}
+    needs: [prepare, deploy]
+    environment: ${{ needs.prepare.outputs.deploy_env }}
     steps:
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Verify deployment
         env:
@@ -179,8 +175,8 @@ jobs:
   live-tests:
     name: Live Tests
     runs-on: ubuntu-latest
-    needs: [validate, health-check]
-    if: needs.validate.outputs.deploy_env == 'staging'
+    needs: [prepare, health-check]
+    if: needs.prepare.outputs.deploy_env == 'staging'
     environment: staging
     steps:
       - name: Set up SSH key
@@ -219,8 +215,43 @@ jobs:
           exit "$TEST_EXIT"
 
       - name: Upload live test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: always()
         with:
           name: live-test-results
           path: live-test-results.xml
+
+  # ─────────────────────────────────────────────
+  # Report staging pipeline status (for staging confidence gate)
+  # ─────────────────────────────────────────────
+  report-status:
+    name: Report Staging Status
+    runs-on: ubuntu-latest
+    needs: [prepare, quality, deploy, health-check, live-tests]
+    if: always() && needs.prepare.outputs.deploy_env == 'staging'
+    permissions:
+      statuses: write
+    steps:
+      - name: Create commit status for staging pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Determine overall result
+          if [[ "${{ needs.quality.result }}" == "success" ]] && \
+             [[ "${{ needs.deploy.result }}" == "success" ]] && \
+             [[ "${{ needs.health-check.result }}" == "success" ]] && \
+             [[ "${{ needs.live-tests.result }}" == "success" ]]; then
+            STATE="success"
+            DESC="All staging checks passed (quality + deploy + health + live tests)"
+          else
+            STATE="failure"
+            DESC="Staging pipeline failed (quality=${{ needs.quality.result }} deploy=${{ needs.deploy.result }} health=${{ needs.health-check.result }} live=${{ needs.live-tests.result }})"
+          fi
+
+          echo "Setting commit status: $STATE — $DESC"
+
+          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -f state="$STATE" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f description="$DESC" \
+            -f context="staging-pipeline/result"
