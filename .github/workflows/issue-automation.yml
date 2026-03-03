@@ -1,26 +1,67 @@
-# Issue close guard — prevent premature issue closure
+# Issue automation — bug triage + close guard
 #
-# If an issue is closed while it still has an open (unmerged) PR linked via
-# "Closes #N" / "Fixes #N" / "Resolves #N", this workflow will reopen the
-# issue and leave an explanatory comment.
+# Combines two lifecycle automations:
+#   - Bug triage: auto-label new bug reports with `triage` and post welcome comment
+#   - Close guard: reopen issues closed while linked PRs are still unmerged
 #
-# Rationale: Issues should only transition to "Done" when the associated PR
-# merges into develop.  See dev/guidelines/issue-management.md.
-
-name: Issue Close Guard
+# See dev/guidelines/issue-management.md for the full issue lifecycle.
+name: Issue Automation
 
 on:
   issues:
-    types: [closed]
+    types: [opened, closed]
 
 permissions:
   issues: write
   pull-requests: read
 
 jobs:
-  guard:
-    name: Check for unmerged linked PRs
+  # ---------------------------------------------------------------------------
+  # Bug triage — runs when an issue is opened
+  # ---------------------------------------------------------------------------
+  triage-bug-report:
+    name: Triage Bug Report
     runs-on: ubuntu-latest
+    if: github.event.action == 'opened'
+    steps:
+      - name: Apply labels and welcome comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Check if the issue has the "bug" label (from bug_report.yml template)
+            const labels = context.payload.issue.labels.map(l => l.name);
+
+            if (labels.includes('bug')) {
+              // Add a "triage" label so maintainers know it's unreviewed
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['triage']
+              });
+
+              // Post a welcome/triage comment
+              const msg = "👋 Thanks for reporting this bug!\n\n" +
+                "It has been automatically marked for `triage`. " +
+                "A maintainer will review it shortly. In the meantime, " +
+                "please ensure your description includes **Steps to Reproduce** " +
+                "and **Environment Details**.";
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: msg
+              });
+            }
+
+  # ---------------------------------------------------------------------------
+  # Close guard — runs when an issue is closed
+  # ---------------------------------------------------------------------------
+  close-guard:
+    name: Check for Unmerged Linked PRs
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed'
     steps:
       - name: Look for open PRs that close this issue
         id: check
@@ -78,7 +119,7 @@ jobs:
           issues should only be closed by merging the associated PR
           into \`develop\` — never manually.
 
-          > _This check is enforced by the Issue Close Guard workflow._
+          > _This check is enforced by the Issue Automation workflow._
           COMMENT
           )
 
