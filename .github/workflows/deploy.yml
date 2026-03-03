@@ -111,7 +111,7 @@ jobs:
           SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
 
           echo "══════════════════════════════════════"
-          echo "  Deploying to: $REMOTE_HOST"
+          echo "  Deploying to: ${{ needs.prepare.outputs.deploy_env }} VM"
           echo "  Environment:  ${{ needs.prepare.outputs.deploy_env }}"
           echo "  Branch:       $DEPLOY_BRANCH"
           echo "══════════════════════════════════════"
@@ -245,7 +245,11 @@ jobs:
             DESC="All staging checks passed (quality + deploy + health + live tests)"
           else
             STATE="failure"
-            DESC="Staging pipeline failed (quality=${{ needs.quality.result }} deploy=${{ needs.deploy.result }} health=${{ needs.health-check.result }} live=${{ needs.live-tests.result }})"
+            DESC="Staging pipeline failed"
+            DESC="$DESC (quality=${{ needs.quality.result }}"
+            DESC="$DESC deploy=${{ needs.deploy.result }}"
+            DESC="$DESC health=${{ needs.health-check.result }}"
+            DESC="$DESC live=${{ needs.live-tests.result }})"
           fi
 
           echo "Setting commit status: $STATE — $DESC"

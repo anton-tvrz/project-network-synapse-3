@@ -688,7 +688,7 @@ Uses GitHub Environments for environment-specific secrets and protection rules. 
 
 **Jobs:**
 
-```
+```text
 quality ──┐
            ├──→ deploy → health-check → live-tests → report-status
 prepare ──┘

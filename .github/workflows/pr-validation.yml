@@ -157,6 +157,8 @@ jobs:
     if: github.event.pull_request.base.ref == 'main'
     permissions:
       actions: read
+      contents: read
+      statuses: read
     steps:
       - name: Check staging pipeline status
         env:

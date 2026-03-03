@@ -194,7 +194,7 @@ See `dev/guidelines/changelog.md` for details.
 |------|---------|---------|
 | `quality.yml` | Reusable quality checks (lint, security, tests) | Called by other workflows (`workflow_call`) |
 | `pr-validation.yml` | PR gates: quality + issue link + changelog + labeler | `pull_request` to main/develop |
-| `deploy.yml` | Deploy pipeline: quality → deploy → health → live tests | `push` to develop/main, manual dispatch |
+| `deploy.yml` | Deploy pipeline: quality + prepare → deploy → health → live tests → report-status | `push` to develop/main, manual dispatch |
 | `release.yml` | Version management: changelog + tag + GitHub Release | Manual dispatch |
 | `build-artifacts.yml` | Docker images + Python packages | Tag push `v*` |
 | `issue-automation.yml` | Bug triage + issue close guard | Issue opened/closed |

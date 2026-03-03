@@ -261,7 +261,9 @@ jobs:
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
+    permissions: {}
     needs:
+      - changes
       - code-quality
       - yaml-lint
       - security-scanning
@@ -277,6 +279,7 @@ jobs:
           echo ""
           echo "| Job | Status |"
           echo "|-----|--------|"
+          echo "| Changes | ${{ needs.changes.result }} |"
           echo "| Code Quality | ${{ needs.code-quality.result }} |"
           echo "| YAML Lint | ${{ needs.yaml-lint.result }} |"
           echo "| Security Scanning | ${{ needs.security-scanning.result }} |"
@@ -287,7 +290,9 @@ jobs:
           echo ""
 
           # Fail if any required job failed (skipped is OK — means path filter excluded it)
-          if [[ "${{ needs.code-quality.result }}" == "failure" ]] || \
+          if [[ "${{ needs.changes.result }}" == "failure" ]] || \
+             [[ "${{ needs.code-quality.result }}" == "failure" ]] || \
+             [[ "${{ needs.yaml-lint.result }}" == "failure" ]] || \
              [[ "${{ needs.security-scanning.result }}" == "failure" ]] || \
              [[ "${{ needs.secrets-detection.result }}" == "failure" ]] || \
              [[ "${{ needs.uv-lock-check.result }}" == "failure" ]] || \
