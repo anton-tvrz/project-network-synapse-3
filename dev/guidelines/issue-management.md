@@ -91,7 +91,7 @@ This gives anyone viewing the issue a real-time progress picture without needing
 
 ## Automated Guardrails
 
-The **Issue Close Guard** workflow (`.github/workflows/issue-close-guard.yml`) enforces the rule that issues must only be closed via PR merge:
+The **Issue Automation** workflow (`.github/workflows/issue-automation.yml`) enforces the rule that issues must only be closed via PR merge:
 
 - Triggers whenever an issue is closed.
 - Checks for any open (unmerged) PRs that reference the issue with `Closes #N` / `Fixes #N` / `Resolves #N`.
