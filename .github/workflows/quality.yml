@@ -1,0 +1,300 @@
+# Reusable quality checks — called by pr-validation.yml and deploy.yml
+#
+# This workflow consolidates all code quality, security, and test jobs
+# into a single reusable component. Callers use workflow_call to invoke it.
+#
+# Usage:
+#   jobs:
+#     quality:
+#       uses: ./.github/workflows/quality.yml
+#       permissions:
+#         contents: read
+#         security-events: write
+#       secrets: inherit
+name: Quality Checks
+
+on:
+  workflow_call:
+    inputs:
+      run-integration-hygiene:
+        description: "Run offline integration tests (hygiene only)"
+        type: boolean
+        default: false
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+env:
+  PYTHON_VERSION: "3.11"
+  UV_VERSION: "latest"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Detect which files changed to conditionally run jobs
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      backend: ${{ steps.filter.outputs.backend }}
+      workers: ${{ steps.filter.outputs.workers }}
+      yaml: ${{ steps.filter.outputs.yaml }}
+      documentation: ${{ steps.filter.outputs.documentation }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: .github/file-filters.yml
+
+  # ---------------------------------------------------------------------------
+  # Code quality — ruff lint + format + mypy
+  # ---------------------------------------------------------------------------
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.python == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Ruff lint check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: MyPy type checking
+        run: uv run mypy backend/ workers/
+        continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # YAML lint
+  # ---------------------------------------------------------------------------
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.yaml == 'true'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --group linting
+
+      - name: YAML lint
+        run: uv run yamllint .
+
+  # ---------------------------------------------------------------------------
+  # Security scanning — bandit (HARD GATE) + SARIF upload
+  # ---------------------------------------------------------------------------
+  security-scanning:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.python == 'true'
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Bandit security scan
+        run: |
+          uv run bandit -r backend/ workers/ -c pyproject.toml -f json -o bandit-report.json
+          uv run bandit -r backend/ workers/ -c pyproject.toml -f sarif -o bandit-results.sarif
+
+      - name: Upload SARIF results to GitHub
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: bandit-results.sarif
+
+  # ---------------------------------------------------------------------------
+  # Secrets detection — gitleaks
+  # ---------------------------------------------------------------------------
+  secrets-detection:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  # ---------------------------------------------------------------------------
+  # uv lock check — verify lock file is in sync
+  # ---------------------------------------------------------------------------
+  uv-lock-check:
+    name: uv Lock Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Verify uv.lock is in sync
+        run: uv lock --check
+
+  # ---------------------------------------------------------------------------
+  # Unit tests
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.python == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run unit tests
+        run: |
+          uv run pytest tests/unit/ -v \
+            --cov=backend/network_synapse --cov=workers/synapse_workers \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --junitxml=test-results.xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: always()
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: coverage.xml
+          fail_ci_if_error: false
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: test-results
+          path: test-results.xml
+
+  # ---------------------------------------------------------------------------
+  # Integration tests (offline hygiene only) — opt-in via input
+  # ---------------------------------------------------------------------------
+  integration-hygiene:
+    name: Integration Tests (Hygiene)
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    if: inputs.run-integration-hygiene
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run integration tests (offline only)
+        run: |
+          # Only run integration tests that don't need live infra.
+          # Tests marked @pytest.mark.integration that require Infrahub/Containerlab
+          # are skipped here — they run against the real GCP VM via the deploy pipeline.
+          uv run pytest tests/integration/ -v --timeout=60 \
+            -k "hygiene" \
+            --tb=short
+
+  # ---------------------------------------------------------------------------
+  # Quality gate — aggregates all job results
+  # ---------------------------------------------------------------------------
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs:
+      - code-quality
+      - yaml-lint
+      - security-scanning
+      - secrets-detection
+      - uv-lock-check
+      - unit-tests
+      - integration-hygiene
+    if: always()
+    steps:
+      - name: Check job results
+        run: |
+          echo "## Quality Gate Summary"
+          echo ""
+          echo "| Job | Status |"
+          echo "|-----|--------|"
+          echo "| Code Quality | ${{ needs.code-quality.result }} |"
+          echo "| YAML Lint | ${{ needs.yaml-lint.result }} |"
+          echo "| Security Scanning | ${{ needs.security-scanning.result }} |"
+          echo "| Secrets Detection | ${{ needs.secrets-detection.result }} |"
+          echo "| uv Lock Check | ${{ needs.uv-lock-check.result }} |"
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |"
+          echo "| Integration Hygiene | ${{ needs.integration-hygiene.result }} |"
+          echo ""
+
+          # Fail if any required job failed (skipped is OK — means path filter excluded it)
+          if [[ "${{ needs.code-quality.result }}" == "failure" ]] || \
+             [[ "${{ needs.security-scanning.result }}" == "failure" ]] || \
+             [[ "${{ needs.secrets-detection.result }}" == "failure" ]] || \
+             [[ "${{ needs.uv-lock-check.result }}" == "failure" ]] || \
+             [[ "${{ needs.unit-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.integration-hygiene.result }}" == "failure" ]]; then
+            echo "Required quality checks failed — blocking pipeline."
+            exit 1
+          fi
+
+          echo "All quality checks passed."
