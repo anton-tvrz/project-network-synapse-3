@@ -583,15 +583,16 @@ All templates share a component dropdown: Backend, Workers, CI/CD, Docker/Infras
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `pr-validation.yml` | PR to main or develop | Quality gates before merge |
-| `ci.yml` | Push to develop | Post-merge validation + integration tests |
-| `deploy.yml` | Manual dispatch | Deploy to dev/staging/prod |
+| `quality.yml` | Called by other workflows | Reusable quality checks (lint, security, tests) |
+| `pr-validation.yml` | PR to main or develop | PR gates: calls quality + issue/changelog enforcement |
+| `deploy.yml` | Push to develop/main + manual | Deploy pipeline: calls quality → deploy → health → live tests |
 | `build-artifacts.yml` | Push tag `v*` | Docker build + package build |
 | `release.yml` | Manual dispatch | Changelog build, tag, GitHub Release |
-| `bug-triage.yml` | Issue opened | Auto-label bug reports with `triage` |
-| `issue-close-guard.yml` | Issue closed | Reopen if unmerged PR still linked |
+| `issue-automation.yml` | Issue opened or closed | Bug triage + issue close guard |
 
-Shared environment:
+**Design principle:** Quality checks (linting, security scanning, testing) are defined once in `quality.yml` as a reusable `workflow_call` workflow. Both `pr-validation.yml` and `deploy.yml` call it, eliminating duplication.
+
+Shared environment (defined in `quality.yml`):
 
 ```yaml
 env:
@@ -601,7 +602,7 @@ env:
 
 ### 9.2 Path-based Conditional Jobs
 
-Uses `dorny/paths-filter@v3` with a centralized `.github/file-filters.yml` to skip unnecessary jobs when unrelated files change:
+The `quality.yml` workflow uses `dorny/paths-filter@v3` with a centralized `.github/file-filters.yml` to skip unnecessary jobs when unrelated files change:
 
 ```yaml
 # .github/file-filters.yml
@@ -619,29 +620,28 @@ documentation:
   - "*.md"
 ```
 
-### 9.3 PR Validation Pipeline
+### 9.3 Reusable Quality Checks (`quality.yml`)
 
-Jobs (in dependency order):
+A `workflow_call` workflow invoked by `pr-validation.yml` and `deploy.yml`. Accepts an `run-integration-hygiene` boolean input to optionally run offline integration tests.
 
-1. **issue-link-check** -- Enforces `Closes/Fixes/Resolves #N` in PR body (skips dependabot + release PRs)
-2. **changelog-check** -- Enforces changelog fragment in PR (skips dependabot, release PRs, `skip-changelog` label)
-3. **changes** -- Path detection using file-filters.yml (always runs)
-4. **code-quality** -- `ruff check .` + `ruff format --check .` + `mypy` (if python changed; mypy with continue-on-error)
-5. **yaml-lint** -- `yamllint .` (if yaml changed)
-6. **security-scanning** -- CodeQL analysis (if python changed)
-7. **secrets-detection** -- GitHub secret scanning (always runs via push protection)
-8. **uv-lock-check** -- `uv lock --check` (always runs)
-9. **unit-tests** -- `pytest tests/unit/` with coverage + Codecov upload + JUnit XML (if python changed)
-10. **labeler** -- Auto-label PRs based on file paths (always runs)
-11. **wiki-reminder** -- Comment on PR if workflow files changed (reminder to update docs)
-12. **pr-summary** -- Aggregation gate: checks results of all required jobs, fails if any failed
+Jobs:
+
+1. **changes** -- Path detection using file-filters.yml (always runs)
+2. **code-quality** -- `ruff check .` + `ruff format --check .` + `mypy` (if python changed; mypy with continue-on-error)
+3. **yaml-lint** -- `yamllint .` (if yaml changed)
+4. **security-scanning** -- Bandit security scan (hard gate) + SARIF upload (if python changed)
+5. **secrets-detection** -- Gitleaks scan (always runs)
+6. **uv-lock-check** -- `uv lock --check` (always runs)
+7. **unit-tests** -- `pytest tests/unit/` with coverage + Codecov upload + JUnit XML (if python changed)
+8. **integration-hygiene** -- `pytest tests/integration/ -k hygiene` (opt-in via input, depends on unit-tests)
+9. **quality-gate** -- Aggregation gate: depends on all above, fails if any required job failed
 
 **Aggregation gate pattern:**
 
 ```yaml
-pr-summary:
+quality-gate:
   if: always()
-  needs: [code-quality, secrets-detection, unit-tests, uv-lock-check]
+  needs: [code-quality, security-scanning, secrets-detection, uv-lock-check, unit-tests, integration-hygiene]
   steps:
     - name: Check results
       run: |
@@ -650,12 +650,19 @@ pr-summary:
         fi
 ```
 
-This ensures the pr-summary job runs even when upstream jobs are skipped (path filtering), and correctly aggregates pass/fail status.
+This ensures the quality-gate job runs even when upstream jobs are skipped (path filtering), and correctly aggregates pass/fail status. Callers depend on `quality` as a single pass/fail signal.
 
-### 9.4 CI Pipeline (Push to develop)
+### 9.4 PR Validation Pipeline
 
-Same jobs as PR validation plus:
-- **integration-tests** -- `pytest tests/integration/ --timeout=300` (depends on unit-tests, `continue-on-error: true`)
+Calls `quality.yml` for all code quality checks, plus PR-specific gates:
+
+1. **quality** -- Reusable workflow call to `quality.yml` (runs all quality checks)
+2. **issue-link-check** -- Enforces `Closes/Fixes/Resolves #N` in PR body (skips dependabot + release PRs)
+3. **changelog-check** -- Enforces changelog fragment in PR (skips dependabot, release PRs, `skip-changelog` label)
+4. **labeler** -- Auto-label PRs based on file paths (always runs)
+5. **wiki-reminder** -- Comment on PR if workflow files changed (reminder to update docs)
+6. **staging-confidence** -- Verifies the staging pipeline passed (main PRs only; see Section 9.5a)
+7. **pr-summary** -- Aggregation gate: checks results of quality, issue-link-check, changelog-check, and staging-confidence
 
 ### 9.5 Deploy (Auto + Manual)
 
@@ -679,13 +686,26 @@ on:
 
 Uses GitHub Environments for environment-specific secrets and protection rules. The `prod` environment has required reviewers configured as a deployment gate.
 
-**Jobs:** validate → deploy → health-check → live-tests (staging only)
+**Jobs:**
 
-The **live-tests** job runs `pytest -m live` on the staging VM after health checks pass, executing tests that require Infrahub, Containerlab, and gNMI connectivity. JUnit XML results are uploaded as workflow artifacts.
+```text
+quality ──┐
+           ├──→ deploy → health-check → live-tests → report-status
+prepare ──┘
+```
+
+- **quality** -- Reusable workflow call to `quality.yml` with `run-integration-hygiene: true`
+- **prepare** -- Determines target environment and ref (runs in parallel with quality)
+- **deploy** -- SSH to VM → `git pull` → `uv sync` → `systemctl restart synapse-worker`
+- **health-check** -- Verify worker process, Temporal (port 8080), Infrahub (port 8000)
+- **live-tests** (staging only) -- `pytest -m live` on the staging VM; JUnit XML results uploaded as artifacts
+- **report-status** (staging only) -- Creates a commit status `staging-pipeline/result` on the develop HEAD, reflecting overall pass/fail of the entire pipeline
 
 ### 9.5a Release Confidence Gate (PR Validation)
 
-PRs targeting `main` include a **staging-confidence** job in `pr-validation.yml` that verifies the most recent Deploy workflow run on `develop` succeeded. This prevents merging to production when the staging deployment is broken.
+PRs targeting `main` include a **staging-confidence** job in `pr-validation.yml`. It checks the `staging-pipeline/result` commit status on the develop branch HEAD, which is set by the deploy pipeline's `report-status` job. This status reflects the combined result of quality checks, deployment, health checks, and live tests — ensuring production merges are blocked unless the full staging pipeline has passed.
+
+Falls back to checking the Deploy workflow run conclusion if no commit status is found (backwards compatibility).
 
 ### 9.6 Build Artifacts (Version Tags)
 
@@ -694,26 +714,17 @@ Triggered on tags matching `v*`:
 - **build-docker** -- Uses `docker/setup-buildx-action`, builds from `development/Dockerfile`
 - **build-package** -- `uv build --package <name>` for each workspace package, uploads `dist/` as artifact
 
-### 9.7 Bug Triage (Issue Opened)
+### 9.7 Issue Automation (Issue Opened/Closed)
 
-Triggers when a new issue is opened. If the issue was created from the Bug Report template, the workflow:
+A single workflow (`issue-automation.yml`) handles two issue lifecycle events:
 
-- Adds the `triage` label to flag it for maintainer review.
-- Posts an automated welcome comment acknowledging the report.
+**Bug triage** (on issue opened): If the issue was created from the Bug Report template, adds the `triage` label and posts an automated welcome comment.
 
-### 9.8 Issue Close Guard (Issue Closed)
-
-Triggers whenever an issue is closed. Prevents premature manual closures by checking whether the issue still has open (unmerged) PRs linked via `Closes #N` / `Fixes #N` / `Resolves #N`.
-
-**Behavior:**
-
-- Searches all open PRs for closing keyword references to the closed issue.
-- If an unmerged PR is found, **reopens the issue** and leaves a comment listing the linked PR(s) with a pointer to the issue management guidelines.
-- If no open PRs reference the issue, the closure stands.
+**Close guard** (on issue closed): Prevents premature manual closures by checking whether the issue still has open (unmerged) PRs linked via `Closes #N` / `Fixes #N` / `Resolves #N`. If an unmerged PR is found, **reopens the issue** and leaves a comment listing the linked PR(s) with a pointer to the issue management guidelines.
 
 This enforces the policy documented in `dev/guidelines/issue-management.md`: issues must only be closed by merging their associated PR into `develop`.
 
-### 9.9 Pinned Action Versions
+### 9.8 Pinned Action Versions
 
 | Action | Version |
 |--------|---------|
@@ -721,10 +732,12 @@ This enforces the policy documented in `dev/guidelines/issue-management.md`: iss
 | actions/setup-python | @v6 |
 | actions/upload-artifact | @v6 |
 | actions/labeler | @v6 |
+| actions/github-script | @v7 |
 | astral-sh/setup-uv | @v7 |
 | dorny/paths-filter | @v3 |
-| codecov/codecov-action | @v4 |
-| github/codeql-action | @v3 |
+| codecov/codecov-action | @v5 |
+| github/codeql-action | @v4 |
+| gitleaks/gitleaks-action | @v2 |
 | docker/setup-buildx-action | @v3 |
 | marocchino/sticky-pull-request-comment | @v2 |
 

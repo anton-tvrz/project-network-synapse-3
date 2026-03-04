@@ -135,14 +135,16 @@ Deployment is **fully automated** via GitHub Actions (see [ADR-0004](../adr/0004
 
 ### Pipeline stages
 
-1. **Validate** — `uv run invoke check-all` + unit tests
-2. **Deploy** — SSH to VM → `git pull` → `uv sync` → `systemctl restart synapse-worker`
-3. **Health check** — verify worker process, Temporal, Infrahub
-4. **Live tests** (staging only) — `pytest -m live` on the staging VM
+1. **Quality** — Reusable quality checks via `quality.yml` (lint, security, tests + integration hygiene)
+2. **Prepare** — Determine target environment and ref (runs in parallel with quality)
+3. **Deploy** — SSH to VM → `git pull` → `uv sync` → `systemctl restart synapse-worker`
+4. **Health check** — verify worker process, Temporal, Infrahub
+5. **Live tests** (staging only) — `pytest -m live` on the staging VM
+6. **Report status** (staging only) — Creates commit status for the staging confidence gate
 
 ### Production approval gate
 
-The `prod` GitHub Actions environment has **required reviewers** configured. Pushes to `main` pause at the environment protection rule until a reviewer approves. PRs targeting `main` also include a **staging-confidence** gate that verifies the last staging deployment succeeded.
+The `prod` GitHub Actions environment has **required reviewers** configured. Pushes to `main` pause at the environment protection rule until a reviewer approves. PRs targeting `main` also include a **staging-confidence** gate that checks the `staging-pipeline/result` commit status on the develop branch HEAD, verifying the full staging pipeline passed (quality + deploy + health + live tests).
 
 ### Required GitHub Secrets (per environment)
 

@@ -186,6 +186,51 @@ CI enforces that every PR includes a changelog fragment. For PRs that don't need
 
 See `dev/guidelines/changelog.md` for details.
 
+## CI/CD Pipeline Architecture
+
+### Workflow Files
+
+| File | Purpose | Trigger |
+|------|---------|---------|
+| `quality.yml` | Reusable quality checks (lint, security, tests) | Called by other workflows (`workflow_call`) |
+| `pr-validation.yml` | PR gates: quality + issue link + changelog + labeler | `pull_request` to main/develop |
+| `deploy.yml` | Deploy pipeline: quality + prepare → deploy → health → live tests → report-status | `push` to develop/main, manual dispatch |
+| `release.yml` | Version management: changelog + tag + GitHub Release | Manual dispatch |
+| `build-artifacts.yml` | Docker images + Python packages | Tag push `v*` |
+| `issue-automation.yml` | Bug triage + issue close guard | Issue opened/closed |
+
+### Invoke Tasks to CI Job Mapping
+
+| Invoke Task | CI Job | Workflow |
+|-------------|--------|----------|
+| `invoke lint` | `code-quality` | quality.yml |
+| `invoke scan` | `security-scanning` | quality.yml |
+| `invoke check-all` | `code-quality` + `security-scanning` | quality.yml |
+| `invoke backend.test-unit` | `unit-tests` | quality.yml |
+| `invoke backend.test-integration` | `integration-hygiene` | quality.yml (when enabled) |
+| `invoke docs.lint-yaml` | `yaml-lint` | quality.yml |
+| `invoke backend.typecheck` | Part of `code-quality` (mypy step) | quality.yml |
+
+### How to Modify CI
+
+1. **Quality checks** (lint, test, security): Edit `quality.yml` — changes propagate to both PR and deploy pipelines
+2. **PR-specific gates** (issue link, changelog): Edit `pr-validation.yml`
+3. **Deploy logic** (SSH, health checks): Edit `deploy.yml`
+4. **Path filters** (which jobs run for which files): Edit `.github/file-filters.yml`
+5. **Auto-labels**: Edit `.github/labeler.yml`
+
+### Environment Secrets
+
+| Secret | Used By | Scope |
+|--------|---------|-------|
+| `VM_SSH_KEY` | deploy.yml | Per-environment (staging, prod) |
+| `VM_HOST` | deploy.yml | Per-environment (staging, prod) |
+| `VM_USER` | deploy.yml | Per-environment (staging, prod) |
+| `CODECOV_TOKEN` | quality.yml | Repository-level |
+| `RELEASE_PAT` | release.yml | Repository-level |
+
+See `dev/knowledge/cicd-architecture.md` Section 9 for the full engineering playbook.
+
 ## Developer Documentation (dev/)
 
 This project follows the **Context Nuggets** pattern (ADR-0001) for developer documentation:
