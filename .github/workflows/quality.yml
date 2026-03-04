@@ -133,8 +133,13 @@ jobs:
 
       - name: Bandit security scan
         run: |
-          uv run bandit -r backend/ workers/ -c pyproject.toml -f json -o bandit-report.json
-          uv run bandit -r backend/ workers/ -c pyproject.toml -f sarif -o bandit-results.sarif
+          # Generate SARIF first (for GitHub upload), then JSON report.
+          # Bandit exits non-zero when it finds issues, so capture the
+          # exit code and re-raise it after both files are written.
+          EXIT_CODE=0
+          uv run bandit -r backend/ workers/ -c pyproject.toml -f sarif -o bandit-results.sarif || EXIT_CODE=$?
+          uv run bandit -r backend/ workers/ -c pyproject.toml -f json -o bandit-report.json || true
+          exit "$EXIT_CODE"
 
       - name: Upload SARIF results to GitHub
         uses: github/codeql-action/upload-sarif@v4
