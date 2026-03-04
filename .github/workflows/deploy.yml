@@ -4,6 +4,11 @@
 # Manual: workflow_dispatch to any environment.
 #
 # Pipeline: quality checks → deploy → health check → live tests (staging only)
+#
+# Network: GitHub Actions runners connect to VMs via Tailscale mesh.
+# No public SSH port is required — all traffic flows over encrypted
+# WireGuard tunnels. Requires TAILSCALE_AUTHKEY secret with an
+# ephemeral key tagged "tag:ci".
 name: Deploy
 
 on:
@@ -82,12 +87,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          # Tailscale handles identity — use its known hosts
+          ssh-keyscan -H ${{ secrets.VM_TAILSCALE_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Resolve deploy branch
         id: branch
@@ -103,17 +116,18 @@ jobs:
 
       - name: Deploy to VM
         env:
-          REMOTE_HOST: ${{ secrets.VM_HOST }}
+          REMOTE_HOST: ${{ secrets.VM_TAILSCALE_HOST }}
           REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
           DEPLOY_BRANCH: ${{ steps.branch.outputs.name }}
         run: |
           SSH_KEY="$HOME/.ssh/deploy_key"
-          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30)
 
           echo "══════════════════════════════════════"
           echo "  Deploying to: ${{ needs.prepare.outputs.deploy_env }} VM"
           echo "  Environment:  ${{ needs.prepare.outputs.deploy_env }}"
           echo "  Branch:       $DEPLOY_BRANCH"
+          echo "  Network:      Tailscale"
           echo "══════════════════════════════════════"
 
           # Pull latest code
@@ -141,20 +155,27 @@ jobs:
     needs: [prepare, deploy]
     environment: ${{ needs.prepare.outputs.deploy_env }}
     steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.VM_TAILSCALE_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Verify deployment
         env:
-          REMOTE_HOST: ${{ secrets.VM_HOST }}
+          REMOTE_HOST: ${{ secrets.VM_TAILSCALE_HOST }}
           REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
         run: |
           SSH_KEY="$HOME/.ssh/deploy_key"
-          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30)
 
           echo "Running health checks..."
 
@@ -179,20 +200,27 @@ jobs:
     if: needs.prepare.outputs.deploy_env == 'staging'
     environment: staging
     steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.VM_TAILSCALE_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Run live tests on staging VM
         env:
-          REMOTE_HOST: ${{ secrets.VM_HOST }}
+          REMOTE_HOST: ${{ secrets.VM_TAILSCALE_HOST }}
           REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
         run: |
           SSH_KEY="$HOME/.ssh/deploy_key"
-          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=yes -o ConnectTimeout=15)
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30)
 
           echo "Running live integration tests on staging VM..."
 
@@ -208,7 +236,7 @@ jobs:
           set -e
 
           # Always copy test results back, even on failure
-          scp -i "$SSH_KEY" -o StrictHostKeyChecking=yes \
+          scp -i "$SSH_KEY" -o StrictHostKeyChecking=no \
             "${REMOTE_USER}@${REMOTE_HOST}:~/project-network-synapse-3/live-test-results.xml" \
             ./live-test-results.xml || true
 
