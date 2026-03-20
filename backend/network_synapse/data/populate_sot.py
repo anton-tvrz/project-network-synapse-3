@@ -563,7 +563,7 @@ def populate_ip_address_pools(
                 # Reference to a prefix pool — look up by name
                 pool_query = f"""
                 query {{
-                    CoreIPPrefixPool(name__value: "{res['pool']}") {{
+                    CoreIPPrefixPool(name__value: "{res["pool"]}") {{
                         edges {{ node {{ id }} }}
                     }}
                 }}

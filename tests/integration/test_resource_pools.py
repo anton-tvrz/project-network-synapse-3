@@ -17,9 +17,7 @@ class TestPoolCreation:
 
     def test_create_number_pool(self, resource_manager):
         """Create a number pool and verify it can be looked up."""
-        pool_id = resource_manager.create_number_pool(
-            "test-asn-pool", "Integration test ASN pool", 64512, 64520
-        )
+        pool_id = resource_manager.create_number_pool("test-asn-pool", "Integration test ASN pool", 64512, 64520)
         assert pool_id is not None
 
         # Verify lookup returns the same pool
@@ -28,12 +26,8 @@ class TestPoolCreation:
 
     def test_create_number_pool_idempotent(self, resource_manager):
         """Creating the same pool twice returns the existing ID."""
-        pool_id1 = resource_manager.create_number_pool(
-            "test-asn-pool-idem", "Idempotency test", 64512, 64520
-        )
-        pool_id2 = resource_manager.create_number_pool(
-            "test-asn-pool-idem", "Idempotency test", 64512, 64520
-        )
+        pool_id1 = resource_manager.create_number_pool("test-asn-pool-idem", "Idempotency test", 64512, 64520)
+        pool_id2 = resource_manager.create_number_pool("test-asn-pool-idem", "Idempotency test", 64512, 64520)
         assert pool_id1 == pool_id2
 
     def test_lookup_nonexistent_pool_returns_none(self, resource_manager):
@@ -53,9 +47,7 @@ class TestNumberAllocation:
 
     def test_allocate_number_returns_value(self, resource_manager):
         """Allocating from a number pool returns an integer in range."""
-        pool_id = resource_manager.create_number_pool(
-            "test-alloc-numbers", "Allocation test", 64512, 64520
-        )
+        pool_id = resource_manager.create_number_pool("test-alloc-numbers", "Allocation test", 64512, 64520)
 
         result = resource_manager.allocate_number(pool_id, identifier="integ-test-1")
         assert isinstance(result.value, int)
@@ -64,9 +56,7 @@ class TestNumberAllocation:
 
     def test_sequential_allocations_are_unique(self, resource_manager):
         """Sequential allocations return different values."""
-        pool_id = resource_manager.create_number_pool(
-            "test-seq-numbers", "Sequential test", 64512, 64520
-        )
+        pool_id = resource_manager.create_number_pool("test-seq-numbers", "Sequential test", 64512, 64520)
 
         result1 = resource_manager.allocate_number(pool_id, identifier="seq-1")
         result2 = resource_manager.allocate_number(pool_id, identifier="seq-2")

@@ -72,9 +72,7 @@ def mock_bgp_query_result():
 def mock_interface_query_result():
     """Mock GraphQL query result for device_interface_config."""
     return {
-        "DcimDevice": {
-            "edges": [{"node": {"id": "dev-1", "name": {"value": "spine01"}}}]
-        },
+        "DcimDevice": {"edges": [{"node": {"id": "dev-1", "name": {"value": "spine01"}}}]},
         "InterfacePhysical": {
             "edges": [
                 {

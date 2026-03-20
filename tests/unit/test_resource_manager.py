@@ -33,9 +33,7 @@ class TestResourceManagerPoolCreation:
                 },
             ]
 
-            pool_id = mgr.create_ip_prefix_pool(
-                "fabric-underlay", "Fabric /31s", 31, ["prefix-id-1"]
-            )
+            pool_id = mgr.create_ip_prefix_pool("fabric-underlay", "Fabric /31s", 31, ["prefix-id-1"])
             assert pool_id == "pool-123"
             assert mock_gql.call_count == 2
 
@@ -43,13 +41,9 @@ class TestResourceManagerPoolCreation:
         """Existing pool returns its ID without creating a duplicate."""
         mgr = InfrahubResourceManager(url="http://test:8000", token="test-token")
         with patch.object(mgr, "_graphql") as mock_gql:
-            mock_gql.return_value = {
-                "CoreIPPrefixPool": {"edges": [{"node": {"id": "existing-pool"}}]}
-            }
+            mock_gql.return_value = {"CoreIPPrefixPool": {"edges": [{"node": {"id": "existing-pool"}}]}}
 
-            pool_id = mgr.create_ip_prefix_pool(
-                "fabric-underlay", "Fabric /31s", 31, ["prefix-id-1"]
-            )
+            pool_id = mgr.create_ip_prefix_pool("fabric-underlay", "Fabric /31s", 31, ["prefix-id-1"])
             assert pool_id == "existing-pool"
             assert mock_gql.call_count == 1  # Only lookup, no create
 
@@ -84,9 +78,7 @@ class TestResourceManagerPoolCreation:
                 },
             ]
 
-            pool_id = mgr.create_ip_address_pool(
-                "loopback-addresses", "Loopback IPs", 32, ["prefix-id-1"]
-            )
+            pool_id = mgr.create_ip_address_pool("loopback-addresses", "Loopback IPs", 32, ["prefix-id-1"])
             assert pool_id == "addr-pool-123"
 
 
@@ -207,9 +199,7 @@ class TestResourceManagerPoolLookup:
         """Returns pool ID when pool exists."""
         mgr = InfrahubResourceManager(url="http://test:8000", token="test-token")
         with patch.object(mgr, "_graphql") as mock_gql:
-            mock_gql.return_value = {
-                "CoreIPPrefixPool": {"edges": [{"node": {"id": "found-pool"}}]}
-            }
+            mock_gql.return_value = {"CoreIPPrefixPool": {"edges": [{"node": {"id": "found-pool"}}]}}
             assert mgr.get_pool_by_name("CoreIPPrefixPool", "test") == "found-pool"
 
     def test_get_pool_by_name_not_found(self):
