@@ -20,9 +20,25 @@ python infrahub/data/populate_sot.py \
 
 # Dry run (parse only)
 python infrahub/data/populate_sot.py --dry-run
+
+# With resource pools (dynamic IP/ASN allocation)
+python infrahub/data/populate_sot.py \
+  --url http://localhost:8000 \
+  --with-pools \
+  --pool-file infrahub/data/pool_definitions.yml
 ```
 
 The script is idempotent — it checks for existing objects before creating and can be safely re-run.
+
+### `--with-pools` Flag
+
+When `--with-pools` is specified, the seed script additionally:
+
+1. Creates IP prefix supernets (e.g., `10.0.0.0/16`, `10.1.0.0/24`)
+2. Creates resource pools referencing those prefixes
+3. Pools can then be used for dynamic allocation via the Resource Manager
+
+See [resource-manager.md](resource-manager.md) for details on pool allocation.
 
 ## Organization & Location
 
@@ -143,6 +159,19 @@ The `populate_sot.py` script creates objects in strict dependency order:
 6. IpamNamespace (default)
 7. IpamVRF (default) — requires namespace
 8. DcimDevice (spine01, leaf01, leaf02) — requires location, platform, device_type, asn
-9. IpamIPAddress (all /31 and /32) — requires namespace
-10. InterfacePhysical (all interfaces) — requires device, ip_addresses
-11. RoutingBGPSession (all 4 sessions) — requires device, local_as, remote_as, local_ip, remote_ip, vrf
+9. IpamPrefix (supernets) — requires namespace *(only with `--with-pools`)*
+10. **Resource Pools** (prefix, address, number pools) — requires prefixes *(only with `--with-pools`)*
+11. IpamIPAddress (all /31 and /32) — requires namespace
+12. InterfacePhysical (all interfaces) — requires device, ip_addresses
+13. RoutingBGPSession (all 4 sessions) — requires device, local_as, remote_as, local_ip, remote_ip, vrf
+
+### Pool Definitions Reference
+
+When using `--with-pools`, pool configuration is read from `pool_definitions.yml`:
+
+| Pool Name | Type | Description | Default Size |
+|-----------|------|-------------|--------------|
+| `fabric-underlay` | `CoreIPPrefixPool` | Fabric /31 point-to-point links | /31 |
+| `loopback-pool` | `CoreIPPrefixPool` | Loopback prefix allocation | /32 |
+| `loopback-addresses` | `CoreIPAddressPool` | Individual loopback IPs | /32 |
+| `asn-pool` | `CoreNumberPool` | ASN allocation (65000–65534) | — |
