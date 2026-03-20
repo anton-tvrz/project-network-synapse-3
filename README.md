@@ -23,7 +23,7 @@ Network automation platform for managing Nokia SR Linux datacenter fabric switch
 # Prerequisites: Python 3.11+, uv (https://docs.astral.sh/uv/)
 
 # Clone and setup
-git clone https://github.com/chinga-chinga/project-network-synapse-3.git
+git clone https://github.com/anton-tvrz/project-network-synapse-3.git
 cd project-network-synapse-3
 git submodule update --init --recursive
 uv sync --all-groups

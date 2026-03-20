@@ -273,3 +273,121 @@ def mock_infrahub_bgp_sessions_response():
             ]
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# Resource Manager / Pool fixtures (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_prefix_pool_response():
+    """Mock GraphQL response for IP prefix pool creation."""
+    return {
+        "CoreIPPrefixPoolCreate": {
+            "ok": True,
+            "object": {"id": "pool-prefix-123", "display_label": "fabric-underlay"},
+        }
+    }
+
+
+@pytest.fixture
+def mock_allocation_response():
+    """Mock GraphQL response for prefix allocation."""
+    return {
+        "IPPrefixPoolGetResource": {
+            "ok": True,
+            "node": {"id": "alloc-1", "prefix": {"value": "10.0.0.0/31"}},
+        }
+    }
+
+
+@pytest.fixture
+def mock_bgp_query_result():
+    """Mock GraphQL query result for BGP transform (device + sessions + loopback)."""
+    return {
+        "DcimDevice": {
+            "edges": [
+                {
+                    "node": {
+                        "id": "dev-1",
+                        "name": {"value": "spine01"},
+                        "description": {"value": "Spine switch"},
+                        "role": {"value": "spine"},
+                        "status": {"value": "active"},
+                        "asn": {"node": {"asn": {"value": 65000}, "name": {"value": "Spine AS"}}},
+                    }
+                }
+            ]
+        },
+        "RoutingBGPSession": {
+            "edges": [
+                {
+                    "node": {
+                        "id": "bgp-1",
+                        "description": {"value": "spine01 to leaf01"},
+                        "session_type": {"value": "EXTERNAL"},
+                        "role": {"value": "backbone"},
+                        "status": {"value": "active"},
+                        "local_as": {"node": {"asn": {"value": 65000}}},
+                        "remote_as": {"node": {"asn": {"value": 65001}}},
+                        "local_ip": {"node": {"address": {"value": "10.0.0.0/31"}}},
+                        "remote_ip": {"node": {"address": {"value": "10.0.0.1/31"}}},
+                        "peer_group": {"node": {"name": {"value": "underlay"}}},
+                    }
+                }
+            ]
+        },
+        "InterfacePhysical": {
+            "edges": [
+                {
+                    "node": {
+                        "name": {"value": "loopback0"},
+                        "role": {"value": "loopback"},
+                        "ip_addresses": {"edges": [{"node": {"address": {"value": "10.1.0.1/32"}}}]},
+                    }
+                }
+            ]
+        },
+    }
+
+
+@pytest.fixture
+def mock_all_bgp_sessions_result():
+    """Mock GraphQL result for all BGP sessions (used by BGP check)."""
+    return {
+        "RoutingBGPSession": {
+            "edges": [
+                {
+                    "node": {
+                        "id": "bgp-1",
+                        "description": {"value": "spine01 to leaf01"},
+                        "session_type": {"value": "EXTERNAL"},
+                        "role": {"value": "backbone"},
+                        "status": {"value": "active"},
+                        "device": {"node": {"name": {"value": "spine01"}}},
+                        "local_as": {"node": {"asn": {"value": 65000}}},
+                        "remote_as": {"node": {"asn": {"value": 65001}}},
+                        "local_ip": {"node": {"address": {"value": "10.0.0.0/31"}}},
+                        "remote_ip": {"node": {"address": {"value": "10.0.0.1/31"}}},
+                        "peer_group": {"node": {"name": {"value": "underlay"}}},
+                    }
+                },
+                {
+                    "node": {
+                        "id": "bgp-2",
+                        "description": {"value": "leaf01 to spine01"},
+                        "session_type": {"value": "EXTERNAL"},
+                        "role": {"value": "backbone"},
+                        "status": {"value": "active"},
+                        "device": {"node": {"name": {"value": "leaf01"}}},
+                        "local_as": {"node": {"asn": {"value": 65001}}},
+                        "remote_as": {"node": {"asn": {"value": 65000}}},
+                        "local_ip": {"node": {"address": {"value": "10.0.0.1/31"}}},
+                        "remote_ip": {"node": {"address": {"value": "10.0.0.0/31"}}},
+                        "peer_group": {"node": {"name": {"value": "underlay"}}},
+                    }
+                },
+            ]
+        }
+    }

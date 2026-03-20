@@ -16,6 +16,39 @@ The backend package (`network_synapse`) handles all interaction with Infrahub (S
 - **`load_schemas.py`** — Loads Infrahub schema extensions in dependency order via the `/api/schema/load` REST endpoint. Loads: VRF -> routing base -> routing BGP -> device extensions -> interface extensions.
 - **Schema YAML files** — Extend Infrahub's built-in types with project-specific attributes (e.g., `management_ip`, `lab_node_name`, `asn` on DcimDevice).
 
+### Infrahub Client (`infrahub/`)
+
+- **`client.py`** — `InfrahubConfigClient` for querying device configs, listing devices, and executing transforms via GraphQL. Uses httpx with lazy authentication.
+- **`resource_manager.py`** — `InfrahubResourceManager` for dynamic IP and ASN allocation via Infrahub's built-in resource pools (CoreIPPrefixPool, CoreIPAddressPool, CoreNumberPool). Provides pool creation, allocation, and high-level device provisioning.
+- **`models.py`** — Pydantic models for device configs, template vars, pool data, and allocation results.
+
+### Transforms (`transforms/`)
+
+Server-side config generation using Infrahub's transform system:
+
+- **`srlinux_bgp_transform.py`** — Generates SR Linux BGP JSON from GraphQL data (replaces `srlinux_bgp.j2`)
+- **`srlinux_interface_transform.py`** — Generates SR Linux interface JSON (replaces `srlinux_interfaces.j2`)
+
+Both extend `infrahub_sdk.transforms.InfrahubTransform`. Registered in `.infrahub.yml`.
+
+### Checks (`checks/`)
+
+Server-side data validation using Infrahub's check system:
+
+- **`bgp_session_check.py`** — Validates ASN values, IP presence, session type consistency
+- **`ip_uniqueness_check.py`** — Detects duplicate IPs within the same namespace
+- **`interface_consistency_check.py`** — Validates fabric interfaces have IPs and descriptions
+
+All extend `infrahub_sdk.checks.InfrahubCheck`. Registered in `.infrahub.yml`.
+
+### GraphQL Queries (`queries/`)
+
+- **`device_bgp_config.gql`** — Device + BGP sessions (BGP transform)
+- **`device_interface_config.gql`** — Device + interfaces (interface transform)
+- **`all_bgp_sessions.gql`** — All BGP sessions (BGP check)
+- **`all_ip_addresses.gql`** — All IP addresses (IP uniqueness check)
+- **`all_device_interfaces.gql`** — All interfaces (interface check)
+
 ### Scripts (`scripts/`)
 
 - **`generate_configs.py`** — Renders Jinja2 templates into Nokia SR Linux JSON configurations suitable for gNMI deployment. Uses `FileSystemLoader` pointing to `templates/`.
@@ -44,13 +77,22 @@ The backend package (`network_synapse`) handles all interaction with Infrahub (S
 ```
 seed_data.yml -> populate_sot.py -> Infrahub GraphQL API
                                           |
-                                    (query device data)
-                                          |
-                              generate_configs.py + templates/
-                                          |
-                                    (SR Linux JSON configs)
-                                          |
-                              deploy_configs.py -> gNMI -> SR Linux devices
-                                          |
-                              validate_configs.py -> gNMI GET -> validation
+                   ┌──────────────────────┤
+                   │                      │
+           (pool allocation)      (query device data)
+                   │                      │
+         resource_manager.py    ┌─────────┴─────────┐
+                   │            │                     │
+                   │   generate_configs.py      Infrahub Transforms
+                   │   + Jinja2 templates/    (server-side, --use-transforms)
+                   │            │                     │
+                   │            └─────────┬───────────┘
+                   │                      │
+                   │              (SR Linux JSON configs)
+                   │                      │
+                   │          deploy_configs.py -> gNMI -> SR Linux devices
+                   │                      │
+                   │          validate_configs.py -> gNMI GET -> validation
+                   │                      │
+                   └──────── Infrahub Checks (data validation)
 ```

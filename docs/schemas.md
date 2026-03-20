@@ -152,6 +152,29 @@ OrganizationManufacturer ──┐
                        └─────────────┘
 ```
 
+## Resource Pools
+
+Infrahub's built-in resource pool system enables dynamic IP and ASN allocation. See [resource-manager.md](resource-manager.md) for full documentation.
+
+### Pool Types
+
+| Pool Type | Infrahub Kind | Allocates |
+|-----------|---------------|-----------|
+| IP Prefix Pool | `CoreIPPrefixPool` | IP prefixes (e.g., /31 for fabric links) |
+| IP Address Pool | `CoreIPAddressPool` | Individual IP addresses (e.g., /32 loopbacks) |
+| Number Pool | `CoreNumberPool` | Integers from a range (e.g., ASNs) |
+
+### Project Pools
+
+| Pool Name | Type | Source | Default Allocation |
+|-----------|------|--------|--------------------|
+| `fabric-underlay` | IP Prefix | `10.0.0.0/16` | /31 |
+| `loopback-pool` | IP Prefix | `10.1.0.0/24` | /32 |
+| `loopback-addresses` | IP Address | loopback-pool | /32 |
+| `asn-pool` | Number | 65000–65534 | Single integer |
+
+Pools are created via `populate_sot.py --with-pools`. See [seed-data.md](seed-data.md) for details.
+
 ## GraphQL Query Examples
 
 ### Query all devices with their ASN and interfaces

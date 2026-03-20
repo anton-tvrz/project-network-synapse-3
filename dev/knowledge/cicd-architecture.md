@@ -583,12 +583,16 @@ All templates share a component dropdown: Backend, Workers, CI/CD, Docker/Infras
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `pr-validation.yml` | PR to main or develop | Quality gates before merge |
-| `ci.yml` | Push to develop | Post-merge validation + integration tests |
-| `deploy.yml` | Manual dispatch | Deploy to dev/staging/prod |
+| `quality.yml` | Called by other workflows | Reusable quality checks (lint, security, tests) |
+| `pr-validation.yml` | PR to main or develop | PR gates: calls quality + issue/changelog enforcement |
+| `deploy.yml` | Push to develop/main + manual | Deploy pipeline: calls quality → deploy → health → live tests |
 | `build-artifacts.yml` | Push tag `v*` | Docker build + package build |
+| `release.yml` | Manual dispatch | Changelog build, tag, GitHub Release |
+| `issue-automation.yml` | Issue opened or closed | Bug triage + issue close guard |
 
-Shared environment:
+**Design principle:** Quality checks (linting, security scanning, testing) are defined once in `quality.yml` as a reusable `workflow_call` workflow. Both `pr-validation.yml` and `deploy.yml` call it, eliminating duplication.
+
+Shared environment (defined in `quality.yml`):
 
 ```yaml
 env:
@@ -598,7 +602,7 @@ env:
 
 ### 9.2 Path-based Conditional Jobs
 
-Uses `dorny/paths-filter@v3` with a centralized `.github/file-filters.yml` to skip unnecessary jobs when unrelated files change:
+The `quality.yml` workflow uses `dorny/paths-filter@v3` with a centralized `.github/file-filters.yml` to skip unnecessary jobs when unrelated files change:
 
 ```yaml
 # .github/file-filters.yml
@@ -616,27 +620,28 @@ documentation:
   - "*.md"
 ```
 
-### 9.3 PR Validation Pipeline
+### 9.3 Reusable Quality Checks (`quality.yml`)
 
-Jobs (in dependency order):
+A `workflow_call` workflow invoked by `pr-validation.yml` and `deploy.yml`. Accepts an `run-integration-hygiene` boolean input to optionally run offline integration tests.
+
+Jobs:
 
 1. **changes** -- Path detection using file-filters.yml (always runs)
 2. **code-quality** -- `ruff check .` + `ruff format --check .` + `mypy` (if python changed; mypy with continue-on-error)
 3. **yaml-lint** -- `yamllint .` (if yaml changed)
-4. **security-scanning** -- CodeQL analysis (if python changed)
-5. **secrets-detection** -- GitHub secret scanning (always runs via push protection)
+4. **security-scanning** -- Bandit security scan (hard gate) + SARIF upload (if python changed)
+5. **secrets-detection** -- Gitleaks scan (always runs)
 6. **uv-lock-check** -- `uv lock --check` (always runs)
 7. **unit-tests** -- `pytest tests/unit/` with coverage + Codecov upload + JUnit XML (if python changed)
-8. **labeler** -- Auto-label PRs based on file paths (always runs)
-9. **wiki-reminder** -- Comment on PR if workflow files changed (reminder to update docs)
-10. **pr-summary** -- Aggregation gate: checks results of all required jobs, fails if any failed
+8. **integration-hygiene** -- `pytest tests/integration/ -k hygiene` (opt-in via input, depends on unit-tests)
+9. **quality-gate** -- Aggregation gate: depends on all above, fails if any required job failed
 
 **Aggregation gate pattern:**
 
 ```yaml
-pr-summary:
+quality-gate:
   if: always()
-  needs: [code-quality, secrets-detection, unit-tests, uv-lock-check]
+  needs: [code-quality, security-scanning, secrets-detection, uv-lock-check, unit-tests, integration-hygiene]
   steps:
     - name: Check results
       run: |
@@ -645,17 +650,28 @@ pr-summary:
         fi
 ```
 
-This ensures the pr-summary job runs even when upstream jobs are skipped (path filtering), and correctly aggregates pass/fail status.
+This ensures the quality-gate job runs even when upstream jobs are skipped (path filtering), and correctly aggregates pass/fail status. Callers depend on `quality` as a single pass/fail signal.
 
-### 9.4 CI Pipeline (Push to develop)
+### 9.4 PR Validation Pipeline
 
-Same jobs as PR validation plus:
-- **integration-tests** -- `pytest tests/integration/ --timeout=300` (depends on unit-tests, `continue-on-error: true`)
+Calls `quality.yml` for all code quality checks, plus PR-specific gates:
 
-### 9.5 Deploy (Manual Dispatch)
+1. **quality** -- Reusable workflow call to `quality.yml` (runs all quality checks)
+2. **issue-link-check** -- Enforces `Closes/Fixes/Resolves #N` in PR body (skips dependabot + release PRs)
+3. **changelog-check** -- Enforces changelog fragment in PR (skips dependabot, release PRs, `skip-changelog` label)
+4. **labeler** -- Auto-label PRs based on file paths (always runs)
+5. **wiki-reminder** -- Comment on PR if workflow files changed (reminder to update docs)
+6. **staging-confidence** -- Verifies the staging pipeline passed (main PRs only; see Section 9.5a)
+7. **pr-summary** -- Aggregation gate: checks results of quality, issue-link-check, changelog-check, and staging-confidence
+
+### 9.5 Deploy (Auto + Manual)
+
+Triggered automatically on push to `develop` (→ staging) or `main` (→ prod), and manually via `workflow_dispatch`. See [ADR-0004](../adr/0004-branch-per-environment-deployment.md).
 
 ```yaml
 on:
+  push:
+    branches: [develop, main]
   workflow_dispatch:
     inputs:
       environment:
@@ -663,7 +679,33 @@ on:
         options: [dev, staging, prod]
 ```
 
-Uses GitHub Environments (`environment: ${{ github.event.inputs.environment }}`) for environment-specific secrets and protection rules.
+| Branch    | Environment | Deploy branch   | Approval |
+|-----------|-------------|-----------------|----------|
+| `develop` | staging     | `origin/develop`| auto     |
+| `main`    | prod        | `origin/main`   | required |
+
+Uses GitHub Environments for environment-specific secrets and protection rules. The `prod` environment has required reviewers configured as a deployment gate.
+
+**Jobs:**
+
+```text
+quality ──┐
+           ├──→ deploy → health-check → live-tests → report-status
+prepare ──┘
+```
+
+- **quality** -- Reusable workflow call to `quality.yml` with `run-integration-hygiene: true`
+- **prepare** -- Determines target environment and ref (runs in parallel with quality)
+- **deploy** -- SSH to VM → `git pull` → `uv sync` → `systemctl restart synapse-worker`
+- **health-check** -- Verify worker process, Temporal (port 8080), Infrahub (port 8000)
+- **live-tests** (staging only) -- `pytest -m live` on the staging VM; JUnit XML results uploaded as artifacts
+- **report-status** (staging only) -- Creates a commit status `staging-pipeline/result` on the develop HEAD, reflecting overall pass/fail of the entire pipeline
+
+### 9.5a Release Confidence Gate (PR Validation)
+
+PRs targeting `main` include a **staging-confidence** job in `pr-validation.yml`. It checks the `staging-pipeline/result` commit status on the develop branch HEAD, which is set by the deploy pipeline's `report-status` job. This status reflects the combined result of quality checks, deployment, health checks, and live tests — ensuring production merges are blocked unless the full staging pipeline has passed.
+
+Falls back to checking the Deploy workflow run conclusion if no commit status is found (backwards compatibility).
 
 ### 9.6 Build Artifacts (Version Tags)
 
@@ -672,7 +714,17 @@ Triggered on tags matching `v*`:
 - **build-docker** -- Uses `docker/setup-buildx-action`, builds from `development/Dockerfile`
 - **build-package** -- `uv build --package <name>` for each workspace package, uploads `dist/` as artifact
 
-### 9.7 Pinned Action Versions
+### 9.7 Issue Automation (Issue Opened/Closed)
+
+A single workflow (`issue-automation.yml`) handles two issue lifecycle events:
+
+**Bug triage** (on issue opened): If the issue was created from the Bug Report template, adds the `triage` label and posts an automated welcome comment.
+
+**Close guard** (on issue closed): Prevents premature manual closures by checking whether the issue still has open (unmerged) PRs linked via `Closes #N` / `Fixes #N` / `Resolves #N`. If an unmerged PR is found, **reopens the issue** and leaves a comment listing the linked PR(s) with a pointer to the issue management guidelines.
+
+This enforces the policy documented in `dev/guidelines/issue-management.md`: issues must only be closed by merging their associated PR into `develop`.
+
+### 9.8 Pinned Action Versions
 
 | Action | Version |
 |--------|---------|
@@ -680,10 +732,12 @@ Triggered on tags matching `v*`:
 | actions/setup-python | @v6 |
 | actions/upload-artifact | @v6 |
 | actions/labeler | @v6 |
+| actions/github-script | @v7 |
 | astral-sh/setup-uv | @v7 |
 | dorny/paths-filter | @v3 |
-| codecov/codecov-action | @v4 |
-| github/codeql-action | @v3 |
+| codecov/codecov-action | @v5 |
+| github/codeql-action | @v4 |
+| gitleaks/gitleaks-action | @v2 |
 | docker/setup-buildx-action | @v3 |
 | marocchino/sticky-pull-request-comment | @v2 |
 
@@ -894,9 +948,15 @@ echo "Fixed schema loader timeout" > changelog/+fix-timeout.fixed.md
 
 **Add a fragment for:** User-facing changes, breaking changes, security fixes.
 
-**Skip for:** Internal refactoring, CI/CD updates, documentation-only changes, test-only changes.
+**Skip for:** Internal refactoring, CI/CD updates, documentation-only changes, test-only changes. Add the `skip-changelog` label to the PR to bypass the CI check.
 
-### 13.4 Building the Changelog
+### 13.4 PR Enforcement
+
+CI blocks PRs that don't include a changelog fragment (`changelog-check` job in `pr-validation.yml`). The check is skipped for dependabot PRs, release PRs (develop→main), and PRs with the `skip-changelog` label.
+
+### 13.5 Building the Changelog
+
+Changelog building is automated by the release workflow (`release.yml`). Manual building is still available:
 
 ```bash
 # Preview
@@ -910,15 +970,38 @@ uv run towncrier build --version X.Y.Z
 
 ## 14. Release Process
 
-1. All feature work merges to `develop` via PRs
+Releases are automated via the `Release` workflow (`.github/workflows/release.yml`), triggered manually via `workflow_dispatch`.
+
+### 14.1 Release Flow
+
+1. All feature work merges to `develop` via PRs (each PR must include a changelog fragment)
 2. CI runs on push to develop (unit + integration tests)
 3. When ready for release: create PR from `develop` to `main`
 4. PR validation runs with all gates including PR Summary
 5. Squash merge to main
-6. Create version tag: `git tag v<X.Y.Z> && git push --tags`
-7. `build-artifacts.yml` triggers: Docker build + package builds
-8. Build changelog: `uv run towncrier build --version X.Y.Z`
-9. Deploy via manual dispatch workflow (choose environment)
+6. Go to **Actions → Release → Run workflow**, enter version (e.g., `0.2.0`)
+7. The workflow automatically:
+   - Validates all closed issues since last tag have changelog fragments (completeness guard)
+   - Compiles fragments into `CHANGELOG.md` via Towncrier
+   - Commits the updated changelog to `main`
+   - Creates and pushes an annotated git tag (`v0.2.0`)
+   - Creates a GitHub Release with the generated notes
+   - Tag push triggers `build-artifacts.yml` (Docker + Python packages)
+8. Deploy via manual dispatch workflow (choose environment)
+
+### 14.2 Completeness Validation
+
+Before publishing, the release workflow checks that every issue closed since the last `v*` tag has a corresponding `changelog/<issue>.*.md` fragment. Issues labeled `duplicate`, `wontfix`, `question`, `invalid`, or `skip-changelog` are excluded. Orphan fragments (no matching closed issue) produce warnings but don't block the release.
+
+### 14.3 Emergency Releases
+
+Use the `skip-validation` checkbox when triggering the workflow to bypass the completeness check.
+
+### 14.4 Prerequisites
+
+The release workflow pushes directly to `main`. Requires:
+- "Repository admin" role in the "Protect main" ruleset bypass list (set to "Always")
+- A Fine-grained PAT (`RELEASE_PAT` secret) with Contents: Read/Write, scoped to this repo
 
 ---
 

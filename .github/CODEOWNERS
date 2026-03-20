@@ -2,27 +2,27 @@
 # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Default owner for everything
-* @chinga-chinga
+* @anton-tvrz
 
 # Backend package
-/backend/ @chinga-chinga
+/backend/ @anton-tvrz
 
 # Workers package
-/workers/ @chinga-chinga
+/workers/ @anton-tvrz
 
 # Infrastructure
-/development/ @chinga-chinga
-/containerlab/ @chinga-chinga
-docker-compose*.yml @chinga-chinga
+/development/ @anton-tvrz
+/containerlab/ @anton-tvrz
+docker-compose*.yml @anton-tvrz
 
 # CI/CD
-/.github/ @chinga-chinga
+/.github/ @anton-tvrz
 
 # Documentation
-/docs/ @chinga-chinga
-/dev/ @chinga-chinga
+/docs/ @anton-tvrz
+/dev/ @anton-tvrz
 
 # Root configs — changes here affect the whole project
-pyproject.toml @chinga-chinga
-uv.lock @chinga-chinga
-.pre-commit-config.yaml @chinga-chinga
+pyproject.toml @anton-tvrz
+uv.lock @anton-tvrz
+.pre-commit-config.yaml @anton-tvrz

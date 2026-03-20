@@ -139,7 +139,7 @@ See `dev/guidelines/git-workflow.md` for full details.
 1. **NEVER SSH or SCP directly to the GCP VM.** All changes must flow through Git.
 2. **ALWAYS create a feature branch** from `develop` (never commit directly to `main` or `develop`).
 3. **ALWAYS open a Pull Request** targeting `develop`. CI must pass before merge.
-4. **Deployment is automated.** Merging to `main` triggers the CD pipeline (`deploy.yml`) which SSHs to the VM, pulls code, and restarts the worker via systemd.
+4. **Deployment is automated.** Pushes to `develop` auto-deploy to **staging**; pushes to `main` deploy to **production** (requires reviewer approval). The staging pipeline also runs live integration tests (`pytest -m live`). See [ADR-0004](dev/adr/0004-branch-per-environment-deployment.md).
 5. **Infrastructure changes** (firewall rules, VM provisioning) must be documented in `docs/install.md` or an ADR, even if applied manually via `gcloud`.
 
 ### Workflow for Code Changes
@@ -152,6 +152,7 @@ uv run invoke check-all               # MUST pass
 git add -A && git commit -m "feat: ..."  # Conventional Commits
 git push -u origin feat/<description>
 gh pr create --base develop            # Open PR — ALWAYS use --base develop
+# PR body MUST include "Closes #<issue-number>" — CI will reject PRs without it
 # → CI validates → Review → Merge → CD auto-deploys
 ```
 
@@ -181,7 +182,54 @@ Uses Towncrier for changelog management. When making changes, add a fragment fil
 echo "Added BGP session validation workflow" > changelog/42.added.md
 ```
 
+CI enforces that every PR includes a changelog fragment. For PRs that don't need one (CI-only, docs-only, test-only, internal refactoring), add the `skip-changelog` label to skip the check.
+
 See `dev/guidelines/changelog.md` for details.
+
+## CI/CD Pipeline Architecture
+
+### Workflow Files
+
+| File | Purpose | Trigger |
+|------|---------|---------|
+| `quality.yml` | Reusable quality checks (lint, security, tests) | Called by other workflows (`workflow_call`) |
+| `pr-validation.yml` | PR gates: quality + issue link + changelog + labeler | `pull_request` to main/develop |
+| `deploy.yml` | Deploy pipeline: quality + prepare → deploy → health → live tests → report-status | `push` to develop/main, manual dispatch |
+| `release.yml` | Version management: changelog + tag + GitHub Release | Manual dispatch |
+| `build-artifacts.yml` | Docker images + Python packages | Tag push `v*` |
+| `issue-automation.yml` | Bug triage + issue close guard | Issue opened/closed |
+
+### Invoke Tasks to CI Job Mapping
+
+| Invoke Task | CI Job | Workflow |
+|-------------|--------|----------|
+| `invoke lint` | `code-quality` | quality.yml |
+| `invoke scan` | `security-scanning` | quality.yml |
+| `invoke check-all` | `code-quality` + `security-scanning` | quality.yml |
+| `invoke backend.test-unit` | `unit-tests` | quality.yml |
+| `invoke backend.test-integration` | `integration-hygiene` | quality.yml (when enabled) |
+| `invoke docs.lint-yaml` | `yaml-lint` | quality.yml |
+| `invoke backend.typecheck` | Part of `code-quality` (mypy step) | quality.yml |
+
+### How to Modify CI
+
+1. **Quality checks** (lint, test, security): Edit `quality.yml` — changes propagate to both PR and deploy pipelines
+2. **PR-specific gates** (issue link, changelog): Edit `pr-validation.yml`
+3. **Deploy logic** (SSH, health checks): Edit `deploy.yml`
+4. **Path filters** (which jobs run for which files): Edit `.github/file-filters.yml`
+5. **Auto-labels**: Edit `.github/labeler.yml`
+
+### Environment Secrets
+
+| Secret | Used By | Scope |
+|--------|---------|-------|
+| `VM_SSH_KEY` | deploy.yml | Per-environment (staging, prod) |
+| `VM_HOST` | deploy.yml | Per-environment (staging, prod) |
+| `VM_USER` | deploy.yml | Per-environment (staging, prod) |
+| `CODECOV_TOKEN` | quality.yml | Repository-level |
+| `RELEASE_PAT` | release.yml | Repository-level |
+
+See `dev/knowledge/cicd-architecture.md` Section 9 for the full engineering playbook.
 
 ## Developer Documentation (dev/)
 

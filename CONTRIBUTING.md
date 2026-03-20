@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone the repository
-git clone https://github.com/chinga-chinga/project-network-synapse-3.git
+git clone https://github.com/anton-tvrz/project-network-synapse-3.git
 cd project-network-synapse-3
 
 # Initialize submodules
@@ -69,6 +69,13 @@ docs: update infrastructure guide
 - **[dev/knowledge/](dev/knowledge/)** — Architecture docs
 - **[dev/guides/](dev/guides/)** — How-to guides (including [PR best practices](dev/guides/pull-request-best-practices.md))
 - **[.coderabbit.yaml](.coderabbit.yaml)** — AI code review configuration (CodeRabbit)
+
+## Reporting Bugs
+
+If you encounter an issue or a bug:
+
+1. Check the existing issues to see if it has already been reported.
+2. If not, open a new issue using the **Bug Report** template. Please fill out the required steps to reproduce and environment details so we can investigate quickly.
 
 ## Questions?
 

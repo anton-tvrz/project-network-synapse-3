@@ -88,27 +88,71 @@ git submodule update --init --recursive
 git submodule update --remote library/schema-library
 ```
 
+## Release Process
+
+Releases are automated via the `Release` workflow (`.github/workflows/release.yml`).
+
+### How to create a release
+
+1. Ensure all features for the release are merged to `develop`
+2. Create and merge a PR from `develop` → `main`
+3. Go to **Actions → Release → Run workflow**
+4. Enter the version number (e.g., `0.2.0`)
+5. The workflow automatically:
+   - Validates all closed issues have changelog fragments
+   - Compiles fragments into `CHANGELOG.md` via Towncrier
+   - Commits the updated changelog to `main`
+   - Creates and pushes a git tag (`v0.2.0`)
+   - Creates a GitHub Release with the generated notes
+   - Triggers the build-artifacts workflow (Docker + Python packages)
+
+### Completeness validation
+
+Before publishing, the workflow checks that every issue closed since the last release tag has a corresponding `changelog/<issue>.*.md` fragment. Issues labeled `duplicate`, `wontfix`, `question`, `invalid`, or `skip-changelog` are excluded from this check.
+
+If issues are missing fragments, the workflow fails with a list of gaps. Fix by adding the missing fragments or labeling the issues with `skip-changelog`.
+
+### Emergency releases
+
+Use the `skip-validation` checkbox when triggering the workflow to bypass the completeness check. Use sparingly.
+
+### One-time admin setup
+
+The workflow commits directly to `main`. Two things are needed:
+
+1. In **Settings → Rules → Rulesets → "Protect main"** → Bypass list, add **"Repository admin"** role (set to "Always")
+2. Create a Fine-grained PAT (Contents: Read/Write, scoped to this repo) and store it as the **`RELEASE_PAT`** secret in Settings → Secrets → Actions
+
 ## Deployment (GitOps)
 
-Deployment is **fully automated** via GitHub Actions.
+Deployment is **fully automated** via GitHub Actions (see [ADR-0004](../adr/0004-branch-per-environment-deployment.md)).
 
-| Trigger                    | Target               | Workflow                       |
-| -------------------------- | -------------------- | ------------------------------ |
-| PR merge to `main`         | GCP VM (staging)     | `.github/workflows/deploy.yml` |
-| Manual `workflow_dispatch` | dev / staging / prod | `.github/workflows/deploy.yml` |
+| Trigger                    | Target                      | Workflow                       |
+| -------------------------- | --------------------------- | ------------------------------ |
+| Push to `develop`          | Staging VM (auto-deploy)    | `.github/workflows/deploy.yml` |
+| Push to `main`             | Production VM (approval required) | `.github/workflows/deploy.yml` |
+| Manual `workflow_dispatch` | dev / staging / prod        | `.github/workflows/deploy.yml` |
 
 ### Pipeline stages
 
-1. **Validate** — `uv run invoke check-all` + unit tests
-2. **Deploy** — SSH to VM → `git pull` → `uv sync` → `systemctl restart synapse-worker`
-3. **Health check** — verify worker process, Temporal, Infrahub
+1. **Quality** — Reusable quality checks via `quality.yml` (lint, security, tests + integration hygiene)
+2. **Prepare** — Determine target environment and ref (runs in parallel with quality)
+3. **Deploy** — SSH to VM → `git pull` → `uv sync` → `systemctl restart synapse-worker`
+4. **Health check** — verify worker process, Temporal, Infrahub
+5. **Live tests** (staging only) — `pytest -m live` on the staging VM
+6. **Report status** (staging only) — Creates commit status for the staging confidence gate
 
-### Required GitHub Secrets
+### Production approval gate
+
+The `prod` GitHub Actions environment has **required reviewers** configured. Pushes to `main` pause at the environment protection rule until a reviewer approves. PRs targeting `main` also include a **staging-confidence** gate that checks the `staging-pipeline/result` commit status on the develop branch HEAD, verifying the full staging pipeline passed (quality + deploy + health + live tests).
+
+### Required GitHub Secrets (per environment)
 
 | Secret       | Purpose                               |
 | ------------ | ------------------------------------- |
 | `VM_SSH_KEY` | SSH private key for the deployment VM |
 | `VM_HOST`    | IP address of the GCP VM              |
+| `VM_USER`    | SSH username on the VM                |
 
 ## Issue Lifecycle
 

@@ -98,6 +98,65 @@ class InterfacesTemplateVars(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Resource manager models — pool definitions and allocation results
+# ---------------------------------------------------------------------------
+
+
+class ResourcePoolData(BaseModel):
+    """Base data for a resource pool."""
+
+    id: str = ""
+    name: str
+    description: str = ""
+
+
+class IPPrefixPoolData(ResourcePoolData):
+    """IP prefix pool data."""
+
+    default_prefix_length: int
+
+
+class IPAddressPoolData(ResourcePoolData):
+    """IP address pool data."""
+
+    default_prefix_length: int = 32
+
+
+class NumberPoolData(ResourcePoolData):
+    """Number pool data."""
+
+    start_range: int
+    end_range: int
+
+
+class AllocationResult(BaseModel):
+    """Result of a resource allocation from a pool."""
+
+    id: str
+    value: str | int
+    pool_id: str
+
+
+class FabricLinkAllocation(BaseModel):
+    """Allocated fabric link between two devices."""
+
+    prefix: str  # e.g. "10.0.0.8/31"
+    local_ip: str  # e.g. "10.0.0.8/31"
+    remote_ip: str  # e.g. "10.0.0.9/31"
+    peer_device: str
+
+
+class ProvisioningResult(BaseModel):
+    """Result of provisioning all resources for a new device."""
+
+    device_name: str
+    role: str
+    asn: int
+    loopback_ip: str  # e.g. "10.1.0.4/32"
+    fabric_links: list[FabricLinkAllocation]
+
+
+# ---------------------------------------------------------------------------
 # Aggregate model — bridges data layer and template layer
 # ---------------------------------------------------------------------------
 

@@ -1,4 +1,9 @@
 # Deploy to dev/staging/prod
+#
+# Auto-deploy: staging on develop push, prod on main push.
+# Manual: workflow_dispatch to any environment.
+#
+# Pipeline: quality checks → deploy → health check → live tests (staging only)
 name: Deploy
 
 on:
@@ -17,20 +22,36 @@ on:
         required: false
         default: "main"
 
-  # Auto-deploy to staging on merge to main
+  # Auto-deploy: staging on develop push, prod on main push
   push:
-    branches: [main]
+    branches: [develop, main]
 
 concurrency:
-  group: deploy-${{ github.event.inputs.environment || 'staging' }}
+  group: deploy-${{ github.event.inputs.environment || (github.ref_name == 'main' && 'prod' || 'staging') }}
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   # ─────────────────────────────────────────────
-  # Pre-deployment validation
+  # Pre-deployment quality gate (reusable workflow)
   # ─────────────────────────────────────────────
-  validate:
-    name: Pre-deployment Checks
+  quality:
+    name: Quality Checks
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+      security-events: write
+    secrets: inherit
+    with:
+      run-integration-hygiene: true
+
+  # ─────────────────────────────────────────────
+  # Prepare deployment (runs in parallel with quality)
+  # ─────────────────────────────────────────────
+  prepare:
+    name: Prepare Deployment
     runs-on: ubuntu-latest
     outputs:
       deploy_env: ${{ steps.env.outputs.environment }}
@@ -42,44 +63,24 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "environment=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
             echo "ref=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            echo "environment=prod" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           else
             echo "environment=staging" >> "$GITHUB_OUTPUT"
             echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.env.outputs.ref }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: uv sync --all-groups
-
-      - name: Run quality checks
-        run: uv run invoke check-all
-
-      - name: Run unit tests
-        run: uv run invoke backend.test-unit
-
   # ─────────────────────────────────────────────
   # Deploy to GCP VM via SSH
   # ─────────────────────────────────────────────
   deploy:
-    name: Deploy to ${{ needs.validate.outputs.deploy_env }}
+    name: Deploy to ${{ needs.prepare.outputs.deploy_env }}
     runs-on: ubuntu-latest
-    needs: validate
-    environment: ${{ needs.validate.outputs.deploy_env }}
+    needs: [quality, prepare]
+    environment: ${{ needs.prepare.outputs.deploy_env }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up SSH key
         run: |
@@ -88,33 +89,46 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: Resolve deploy branch
+        id: branch
+        run: |
+          ENV="${{ needs.prepare.outputs.deploy_env }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ needs.prepare.outputs.deploy_ref }}" >> "$GITHUB_OUTPUT"
+          elif [ "$ENV" = "prod" ]; then
+            echo "name=origin/main" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=origin/develop" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy to VM
         env:
           REMOTE_HOST: ${{ secrets.VM_HOST }}
           REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
+          DEPLOY_BRANCH: ${{ steps.branch.outputs.name }}
         run: |
           SSH_KEY="$HOME/.ssh/deploy_key"
-          SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=15"
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
 
           echo "══════════════════════════════════════"
-          echo "  Deploying to: $REMOTE_HOST"
-          echo "  Ref:          ${{ needs.validate.outputs.deploy_ref }}"
+          echo "  Deploying to: ${{ needs.prepare.outputs.deploy_env }} VM"
+          echo "  Environment:  ${{ needs.prepare.outputs.deploy_env }}"
+          echo "  Branch:       $DEPLOY_BRANCH"
           echo "══════════════════════════════════════"
 
           # Pull latest code
-          ssh $SSH_OPTS ${REMOTE_USER}@${REMOTE_HOST} "
-            export PATH=\$HOME/.local/bin:\$PATH
+          ssh "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" bash -s -- "$DEPLOY_BRANCH" <<'REMOTE'
+            export PATH="$HOME/.local/bin:$PATH"
             cd ~/project-network-synapse-3
             git fetch origin
-            git reset --hard origin/main
+            git reset --hard "$1"
             git submodule update --init --recursive
             uv sync --all-groups
-          "
+          REMOTE
 
           # Restart the worker
-          ssh $SSH_OPTS ${REMOTE_USER}@${REMOTE_HOST} "
-            sudo systemctl restart synapse-worker
-          "
+          ssh "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" \
+            "sudo systemctl restart synapse-worker"
 
           echo "Deployment complete"
 
@@ -124,13 +138,15 @@ jobs:
   health-check:
     name: Health Check
     runs-on: ubuntu-latest
-    needs: [validate, deploy]
+    needs: [prepare, deploy]
+    environment: ${{ needs.prepare.outputs.deploy_env }}
     steps:
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Verify deployment
         env:
@@ -138,11 +154,11 @@ jobs:
           REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
         run: |
           SSH_KEY="$HOME/.ssh/deploy_key"
-          SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=15"
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
 
           echo "Running health checks..."
 
-          ssh $SSH_OPTS ${REMOTE_USER}@${REMOTE_HOST} "
+          ssh "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "
             # Worker is running
             sudo systemctl is-active synapse-worker && echo '✓ Worker active' || echo '✗ Worker down'
 
@@ -152,3 +168,94 @@ jobs:
             # Infrahub responds
             curl -s -o /dev/null -w 'Infrahub:    HTTP %{http_code}\n' http://localhost:8000
           "
+
+  # ─────────────────────────────────────────────
+  # Live integration tests (staging only)
+  # ─────────────────────────────────────────────
+  live-tests:
+    name: Live Tests
+    runs-on: ubuntu-latest
+    needs: [prepare, health-check]
+    if: needs.prepare.outputs.deploy_env == 'staging'
+    environment: staging
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Run live tests on staging VM
+        env:
+          REMOTE_HOST: ${{ secrets.VM_HOST }}
+          REMOTE_USER: ${{ secrets.VM_USER || 'anton' }}
+        run: |
+          SSH_KEY="$HOME/.ssh/deploy_key"
+          SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=yes -o ConnectTimeout=15)
+
+          echo "Running live integration tests on staging VM..."
+
+          set +e
+          ssh "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "
+            export PATH=\"\$HOME/.local/bin:\$PATH\"
+            cd ~/project-network-synapse-3
+            uv run pytest tests/integration/ -v -m live \
+              --timeout=120 \
+              --junitxml=live-test-results.xml
+          "
+          TEST_EXIT=$?
+          set -e
+
+          # Always copy test results back, even on failure
+          scp -i "$SSH_KEY" -o StrictHostKeyChecking=yes \
+            "${REMOTE_USER}@${REMOTE_HOST}:~/project-network-synapse-3/live-test-results.xml" \
+            ./live-test-results.xml || true
+
+          exit "$TEST_EXIT"
+
+      - name: Upload live test results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: live-test-results
+          path: live-test-results.xml
+
+  # ─────────────────────────────────────────────
+  # Report staging pipeline status (for staging confidence gate)
+  # ─────────────────────────────────────────────
+  report-status:
+    name: Report Staging Status
+    runs-on: ubuntu-latest
+    needs: [prepare, quality, deploy, health-check, live-tests]
+    if: always() && needs.prepare.outputs.deploy_env == 'staging'
+    permissions:
+      statuses: write
+    steps:
+      - name: Create commit status for staging pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Determine overall result
+          if [[ "${{ needs.quality.result }}" == "success" ]] && \
+             [[ "${{ needs.deploy.result }}" == "success" ]] && \
+             [[ "${{ needs.health-check.result }}" == "success" ]] && \
+             [[ "${{ needs.live-tests.result }}" == "success" ]]; then
+            STATE="success"
+            DESC="All staging checks passed (quality + deploy + health + live tests)"
+          else
+            STATE="failure"
+            DESC="Staging pipeline failed"
+            DESC="$DESC (quality=${{ needs.quality.result }}"
+            DESC="$DESC deploy=${{ needs.deploy.result }}"
+            DESC="$DESC health=${{ needs.health-check.result }}"
+            DESC="$DESC live=${{ needs.live-tests.result }})"
+          fi
+
+          echo "Setting commit status: $STATE — $DESC"
+
+          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -f state="$STATE" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f description="$DESC" \
+            -f context="staging-pipeline/result"
