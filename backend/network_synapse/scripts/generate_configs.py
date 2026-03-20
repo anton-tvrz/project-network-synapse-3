@@ -79,6 +79,55 @@ def validate_json_output(rendered: str, label: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def generate_for_device_via_transforms(
+    client: InfrahubConfigClient,
+    hostname: str,
+    output_dir: Path,
+    dry_run: bool,
+) -> bool:
+    """Generate SR Linux configs using Infrahub server-side transforms.
+
+    Returns True on success, False on failure.
+    """
+    print(f"\n{'=' * 50}")
+    print(f"  Generating configs for: {hostname} (via transforms)")
+    print(f"{'=' * 50}")
+
+    try:
+        bgp_json = validate_json_output(
+            client.execute_transform("srlinux_bgp_config", {"hostname": hostname}),
+            f"{hostname}/bgp",
+        )
+        iface_json = validate_json_output(
+            client.execute_transform("srlinux_interface_config", {"hostname": hostname}),
+            f"{hostname}/interfaces",
+        )
+    except Exception as exc:
+        print(f"  ERROR: Transform execution failed for '{hostname}': {exc}", file=sys.stderr)
+        return False
+
+    if dry_run:
+        print(f"\n--- {hostname}/bgp.json ---")
+        print(bgp_json)
+        print(f"\n--- {hostname}/interfaces.json ---")
+        print(iface_json)
+        return True
+
+    device_dir = output_dir / hostname
+    device_dir.mkdir(parents=True, exist_ok=True)
+
+    bgp_path = device_dir / "bgp.json"
+    iface_path = device_dir / "interfaces.json"
+
+    bgp_path.write_text(bgp_json + "\n")
+    iface_path.write_text(iface_json + "\n")
+
+    print(f"  Written: {bgp_path}")
+    print(f"  Written: {iface_path}")
+
+    return True
+
+
 def generate_for_device(
     client: InfrahubConfigClient,
     hostname: str,
@@ -175,11 +224,18 @@ def main() -> None:
         action="store_true",
         help="Print configs to stdout instead of writing files",
     )
+    parser.add_argument(
+        "--use-transforms",
+        action="store_true",
+        help="Use Infrahub server-side transforms instead of local Jinja2 templates",
+    )
     args = parser.parse_args()
 
     print(f"Infrahub URL: {args.url}")
     print(f"Output dir:   {args.output_dir}")
     print(f"Dry run:      {args.dry_run}")
+    if args.use_transforms:
+        print("Mode:         Infrahub transforms (server-side)")
 
     try:
         with InfrahubConfigClient(url=args.url, token=args.token) as client:
@@ -191,9 +247,10 @@ def main() -> None:
                 hostnames = [args.device]
 
             # Generate configs for each device
+            gen_func = generate_for_device_via_transforms if args.use_transforms else generate_for_device
             results: dict[str, bool] = {}
             for hostname in hostnames:
-                results[hostname] = generate_for_device(
+                results[hostname] = gen_func(
                     client,
                     hostname,
                     args.output_dir,

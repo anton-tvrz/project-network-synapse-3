@@ -403,3 +403,34 @@ class InfrahubConfigClient:
             raise RuntimeError(f"Failed to update status for device '{hostname}': {result}")
 
         return device
+
+    def execute_transform(self, transform_name: str, variables: dict[str, Any] | None = None) -> str:
+        """Execute an Infrahub Python transform and return the result.
+
+        Args:
+            transform_name: Name of the registered transform (from .infrahub.yml).
+            variables: Variables to pass to the transform's GraphQL query.
+
+        Returns:
+            Transform output as a string (typically JSON).
+
+        Raises:
+            RuntimeError: If the transform execution fails.
+        """
+        query = """
+        query ExecuteTransform($name: String!, $params: JSON) {
+            InfrahubTransformPython(transform: $name, params: $params) {
+                data
+            }
+        }
+        """
+        gql_vars: dict[str, Any] = {"name": transform_name}
+        if variables:
+            gql_vars["params"] = variables
+
+        result = self._graphql(query, variables=gql_vars)
+        transform_result = result.get("InfrahubTransformPython", {})
+        data = transform_result.get("data")
+        if data is None:
+            raise RuntimeError(f"Transform '{transform_name}' returned no data: {result}")
+        return str(data)
