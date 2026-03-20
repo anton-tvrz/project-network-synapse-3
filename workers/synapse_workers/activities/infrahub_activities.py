@@ -1,7 +1,7 @@
 """Temporal activities for interacting with Infrahub source of truth.
 
 These activities run in Temporal's thread-pool executor, so synchronous
-httpx calls (used by InfrahubConfigClient) are fine here.
+httpx calls (used by InfrahubConfigClient and InfrahubResourceManager) are fine here.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import os
 from temporalio import activity
 
 from network_synapse.infrahub.client import InfrahubConfigClient
+from network_synapse.infrahub.resource_manager import InfrahubResourceManager
 
 
 @activity.defn
@@ -72,3 +73,42 @@ async def update_device_status(device_hostname: str, status: str) -> None:
         )
     finally:
         client.close()
+
+
+@activity.defn
+async def allocate_device_resources(
+    device_name: str,
+    role: str,
+    peer_devices: list[str],
+) -> dict:
+    """Allocate resources from Infrahub pools for a new device.
+
+    Uses the resource manager to dynamically allocate:
+    - ASN from the asn-pool
+    - Loopback /32 from the loopback-addresses pool
+    - Fabric /31 per peer from the fabric-underlay pool
+
+    Args:
+        device_name: Name of the device to provision.
+        role: Device role (spine, leaf, etc.).
+        peer_devices: List of peer device names for fabric links.
+
+    Returns:
+        dict with provisioning result (asn, loopback_ip, fabric_links).
+    """
+    mgr = InfrahubResourceManager(
+        url=os.getenv("INFRAHUB_URL", "http://localhost:8000"),
+        token=os.getenv("INFRAHUB_TOKEN", ""),
+    )
+    try:
+        result = mgr.provision_device(device_name, role, peer_devices)
+        activity.logger.info(
+            "Resources allocated: device=%s asn=%d loopback=%s fabric_links=%d",
+            device_name,
+            result.asn,
+            result.loopback_ip,
+            len(result.fabric_links),
+        )
+        return result.model_dump()
+    finally:
+        mgr.close()
