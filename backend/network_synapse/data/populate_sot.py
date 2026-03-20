@@ -495,6 +495,172 @@ def populate_bgp_sessions(
 
 
 # ---------------------------------------------------------------------------
+# Resource pool population (opt-in via --with-pools)
+# ---------------------------------------------------------------------------
+
+
+def populate_ip_prefix_pools(
+    client: httpx.Client,
+    base_url: str,
+    pool_defs: dict,
+    prefix_ids: dict[str, str],
+) -> dict[str, str]:
+    """Create IP prefix pools. Returns {pool_name: pool_id} mapping."""
+    pool_ids = {}
+    for pool in pool_defs.get("ip_prefix_pools", []):
+        name = pool["name"]
+
+        # Resolve resource prefix IDs
+        resource_ids = []
+        for res in pool.get("resources", []):
+            prefix = res["prefix"]
+            if prefix in prefix_ids:
+                resource_ids.append(prefix_ids[prefix])
+            else:
+                print(f"  ⚠  Pool '{name}': resource prefix '{prefix}' not found, skipping")
+
+        if not resource_ids:
+            print(f"  ⚠  Pool '{name}': no valid resources, skipping")
+            continue
+
+        create_data: dict[str, Any] = {
+            "name": {"value": name},
+            "description": {"value": pool.get("description", "")},
+            "default_prefix_length": {"value": pool["default_prefix_length"]},
+            "resources": [{"id": rid} for rid in resource_ids],
+        }
+
+        pool_id = get_or_create(
+            client,
+            base_url,
+            "CoreIPPrefixPool",
+            "name",
+            name,
+            create_data,
+            label=f"IPPrefixPool: {name}",
+        )
+        pool_ids[name] = pool_id
+    return pool_ids
+
+
+def populate_ip_address_pools(
+    client: httpx.Client,
+    base_url: str,
+    pool_defs: dict,
+    prefix_ids: dict[str, str],
+) -> dict[str, str]:
+    """Create IP address pools. Returns {pool_name: pool_id} mapping."""
+    pool_ids = {}
+    for pool in pool_defs.get("ip_address_pools", []):
+        name = pool["name"]
+
+        # Resolve resource IDs (can reference prefixes directly)
+        resource_ids = []
+        for res in pool.get("resources", []):
+            if "prefix" in res and res["prefix"] in prefix_ids:
+                resource_ids.append(prefix_ids[res["prefix"]])
+            elif "pool" in res:
+                # Reference to a prefix pool — look up by name
+                pool_query = f"""
+                query {{
+                    CoreIPPrefixPool(name__value: "{res['pool']}") {{
+                        edges {{ node {{ id }} }}
+                    }}
+                }}
+                """
+                result = graphql(client, base_url, pool_query)
+                edges = result.get("CoreIPPrefixPool", {}).get("edges", [])
+                if edges:
+                    resource_ids.append(edges[0]["node"]["id"])
+                else:
+                    print(f"  ⚠  Pool '{name}': referenced pool '{res['pool']}' not found")
+
+        if not resource_ids:
+            print(f"  ⚠  Pool '{name}': no valid resources, skipping")
+            continue
+
+        create_data: dict[str, Any] = {
+            "name": {"value": name},
+            "description": {"value": pool.get("description", "")},
+            "default_prefix_length": {"value": pool.get("default_prefix_length", 32)},
+            "resources": [{"id": rid} for rid in resource_ids],
+        }
+
+        pool_id = get_or_create(
+            client,
+            base_url,
+            "CoreIPAddressPool",
+            "name",
+            name,
+            create_data,
+            label=f"IPAddressPool: {name}",
+        )
+        pool_ids[name] = pool_id
+    return pool_ids
+
+
+def populate_number_pools(
+    client: httpx.Client,
+    base_url: str,
+    pool_defs: dict,
+) -> dict[str, str]:
+    """Create number pools. Returns {pool_name: pool_id} mapping."""
+    pool_ids = {}
+    for pool in pool_defs.get("number_pools", []):
+        name = pool["name"]
+        create_data: dict[str, Any] = {
+            "name": {"value": name},
+            "description": {"value": pool.get("description", "")},
+            "start_range": {"value": pool["start_range"]},
+            "end_range": {"value": pool["end_range"]},
+        }
+
+        pool_id = get_or_create(
+            client,
+            base_url,
+            "CoreNumberPool",
+            "name",
+            name,
+            create_data,
+            label=f"NumberPool: {name}",
+        )
+        pool_ids[name] = pool_id
+    return pool_ids
+
+
+# ---------------------------------------------------------------------------
+# IP prefix population (used by both static and pool flows)
+# ---------------------------------------------------------------------------
+
+
+def populate_ip_prefixes(
+    client: httpx.Client,
+    base_url: str,
+    seed: dict,
+    namespace_id: str,
+) -> dict[str, str]:
+    """Create IP prefixes (supernets). Returns {prefix: id} mapping."""
+    prefix_ids = {}
+    for pfx in seed.get("ip_prefixes", []):
+        prefix = pfx["prefix"]
+        pfx_id = get_or_create(
+            client,
+            base_url,
+            "IpamPrefix",
+            "prefix",
+            prefix,
+            {
+                "prefix": {"value": prefix},
+                "description": {"value": pfx.get("description", "")},
+                "ip_namespace": {"id": namespace_id},
+            },
+            label=f"Prefix: {prefix}",
+        )
+        prefix_ids[prefix] = pfx_id
+    return prefix_ids
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -521,6 +687,16 @@ def main():
         action="store_true",
         help="Parse seed data without creating objects",
     )
+    parser.add_argument(
+        "--with-pools",
+        action="store_true",
+        help="Create resource pools (IP prefix, IP address, number pools) from pool_definitions.yml",
+    )
+    parser.add_argument(
+        "--pool-file",
+        default=None,
+        help="Path to pool definitions YAML file (default: data/pool_definitions.yml)",
+    )
     args = parser.parse_args()
 
     project_root = get_project_root()
@@ -538,6 +714,20 @@ def main():
     with seed_file.open() as f:
         seed = yaml.safe_load(f)
 
+    # Load pool definitions if --with-pools is set
+    pool_defs = None
+    if args.with_pools:
+        pool_file = (
+            Path(args.pool_file)
+            if args.pool_file
+            else project_root / "backend" / "network_synapse" / "data" / "pool_definitions.yml"
+        )
+        if not pool_file.exists():
+            print(f"❌ Pool definitions file not found: {pool_file}")
+            sys.exit(1)
+        with pool_file.open() as f:
+            pool_defs = yaml.safe_load(f)
+
     print(f"🔧 Project root: {project_root}")
     print(f"🌐 Infrahub URL: {args.url}")
     print(f"📄 Seed file: {seed_file}")
@@ -546,6 +736,13 @@ def main():
         f"{len(seed.get('interfaces', []))} interfaces, "
         f"{len(seed.get('bgp_sessions', []))} BGP sessions"
     )
+    if pool_defs:
+        print(
+            f"🏊 Pool definitions loaded: "
+            f"{len(pool_defs.get('ip_prefix_pools', []))} prefix pools, "
+            f"{len(pool_defs.get('ip_address_pools', []))} address pools, "
+            f"{len(pool_defs.get('number_pools', []))} number pools"
+        )
 
     if args.dry_run:
         print("\n🏁 Dry run complete. Seed data parsed successfully.")
@@ -607,10 +804,24 @@ def main():
             as_ids,
         )
 
-        print("\n9️⃣  Creating IP addresses...")
+        print("\n9️⃣  Creating IP prefixes...")
+        prefix_ids = populate_ip_prefixes(client, args.url, seed, namespace_id)
+
+        # Resource pools (opt-in)
+        if pool_defs:
+            print("\n🏊  Creating IP prefix pools...")
+            ip_prefix_pool_ids = populate_ip_prefix_pools(client, args.url, pool_defs, prefix_ids)
+
+            print("\n🏊  Creating IP address pools...")
+            ip_address_pool_ids = populate_ip_address_pools(client, args.url, pool_defs, prefix_ids)
+
+            print("\n🏊  Creating number pools...")
+            number_pool_ids = populate_number_pools(client, args.url, pool_defs)
+
+        print("\n🔟  Creating IP addresses...")
         ip_ids = populate_ip_addresses(client, args.url, seed, namespace_id)
 
-        print("\n🔟  Creating interfaces...")
+        print("\n1️⃣1️⃣  Creating interfaces...")
         iface_ids = populate_interfaces(
             client,
             args.url,
@@ -619,7 +830,7 @@ def main():
             ip_ids,
         )
 
-        print("\n1️⃣1️⃣  Creating BGP sessions...")
+        print("\n1️⃣2️⃣  Creating BGP sessions...")
         populate_bgp_sessions(
             client,
             args.url,
@@ -635,7 +846,12 @@ def main():
     print(f"   Devices: {len(device_ids)}")
     print(f"   Interfaces: {len(iface_ids)}")
     print(f"   IP Addresses: {len(ip_ids)}")
+    print(f"   Prefixes: {len(prefix_ids)}")
     print(f"   BGP Sessions: {len(seed.get('bgp_sessions', []))}")
+    if pool_defs:
+        print(f"   IP Prefix Pools: {len(ip_prefix_pool_ids)}")
+        print(f"   IP Address Pools: {len(ip_address_pool_ids)}")
+        print(f"   Number Pools: {len(number_pool_ids)}")
 
 
 if __name__ == "__main__":
